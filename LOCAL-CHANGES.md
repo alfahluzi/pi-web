@@ -93,10 +93,11 @@ contains `.ppm`, and editing task status from the panel.
 ## Deploy
 
 `./deploy-to-pi-web.sh` promotes this build to the globally installed `pi-web`
-command used by pm2, by symlinking `~/.local/lib/node_modules/@agegr/pi-web` to
-this directory. This git repository is the single source of truth: the original
-npm install and its `@agegr/pi-web.npm-backup` copy were removed on 2026-10-01.
-Revert instructions are at the top of the script.
+command used by pm2 (app `pi-web-custom`, port 4201), by symlinking
+`~/.local/lib/node_modules/@agegr/pi-web` to this directory. This git repository
+is the single source of truth: the original npm install, its
+`@agegr/pi-web.npm-backup` copy, and the former `pi-web` app on port 4200 were
+all removed on 2026-10-01. Revert instructions are at the top of the script.
 
 Restarting pi-web ends any running agent session, so run it when you are not in
 the middle of a conversation.
