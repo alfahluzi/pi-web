@@ -17,6 +17,8 @@ import { ToolDefinitionsPanel } from "./ToolDefinitionsPanel";
 import { AgentSessionPanel } from "./AgentSessionPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { newTerminalTab, restoreTerminalTabs, TERMINAL_TABS_KEY, type TerminalTab } from "./terminal-tab-state";
+import { ProjectPlanPanel } from "./ProjectPlanPanel";
+import { newPlanTab, type PlanTab } from "./project-plan-tab-state";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile, useIsNarrowMobile } from "@/hooks/useIsMobile";
@@ -461,8 +463,14 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
+  const [planTabs, setPlanTabs] = useState<PlanTab[]>([]);
   const [terminalsRestored, setTerminalsRestored] = useState(false);
-  const panelTabs: Tab[] = [...fileTabs, ...terminalTabs.map((tab) => ({
+  const panelTabs: Tab[] = [...fileTabs, ...planTabs.map((tab) => ({
+    id: tab.id,
+    label: translate("plan.tabLabel"),
+    filePath: tab.cwd,
+    kind: "plan" as const,
+  })), ...terminalTabs.map((tab) => ({
     id: tab.id,
     label: getFileName(tab.cwd) || tab.cwd,
     filePath: tab.cwd,
@@ -1066,30 +1074,56 @@ export function AppShell() {
     if (isMobile) setSidebarOpen(false);
   }, [terminalTabs, isMobile]);
 
+  const handleOpenPlanPanel = useCallback((cwd: string) => {
+    const tab = newPlanTab(cwd);
+    setPlanTabs((tabs) => tabs.some((existing) => existing.id === tab.id) ? tabs : [...tabs, tab]);
+    setActiveFileTabId(tab.id);
+    setRightPanelOpen(true);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
+  const handleInsertPrompt = useCallback((prompt: string) => {
+    chatInputRef.current?.insertText(prompt);
+  }, []);
+
+  const handleOpenPlanFile = useCallback((filePath: string, fileName: string) => {
+    handleOpenFile(filePath, fileName, { sourceSessionId: selectedSession?.id ?? null });
+  }, [handleOpenFile, selectedSession?.id]);
+
   const handleTerminalClosed = (tab: TerminalTab) => {
     const replacement = tab.closing === "restart" ? newTerminalTab(tab.cwd) : null;
     const remaining = terminalTabs.filter((item) => item.id !== tab.id);
     setTerminalTabs((tabs) => tabs.flatMap((item) => item.id !== tab.id ? [item] : replacement ? [replacement] : []));
     setActiveFileTabId((current) => current !== tab.id ? current : replacement?.id ?? remaining.at(-1)?.id ?? fileTabs.at(-1)?.id ?? null);
-    if (!replacement && !remaining.length && !fileTabs.length) setRightPanelOpen(false);
+    if (!replacement && !remaining.length && !fileTabs.length && !planTabs.length) setRightPanelOpen(false);
   };
 
   const handleCloseFileTab = useCallback((tabId: string) => {
+    if (planTabs.some((tab) => tab.id === tabId)) {
+      const remaining = planTabs.filter((tab) => tab.id !== tabId);
+      setPlanTabs(remaining);
+      setActiveFileTabId((cur) => {
+        if (cur !== tabId) return cur;
+        return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? fileTabs.at(-1)?.id ?? null;
+      });
+      if (!remaining.length && !terminalTabs.length && !fileTabs.length) setRightPanelOpen(false);
+      return;
+    }
     if (terminalTabs.some((tab) => tab.id === tabId)) {
       setTerminalTabs((tabs) => tabs.map((tab) => tab.id === tabId && !tab.closing ? { ...tab, closing: "close" } : tab));
       return;
     }
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0 && terminalTabs.length === 0) setRightPanelOpen(false);
+      if (next.length === 0 && terminalTabs.length === 0 && planTabs.length === 0) setRightPanelOpen(false);
       return next;
     });
     setActiveFileTabId((cur) => {
       if (cur !== tabId) return cur;
       const remaining = fileTabs.filter((t) => t.id !== tabId);
-      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? null;
+      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? planTabs.at(-1)?.id ?? null;
     });
-  }, [fileTabs, terminalTabs]);
+  }, [fileTabs, terminalTabs, planTabs]);
 
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;
@@ -1159,6 +1193,7 @@ export function AppShell() {
   }, [projectTrustBusy, projectTrustCwd]);
 
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
+  const activePlanTab = planTabs.find((tab) => tab.id === activeFileTabId) ?? null;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
 
@@ -1759,6 +1794,42 @@ export function AppShell() {
     );
   };
 
+  const renderPlanPanelToggle = () => {
+    const cwd = projectTrustCwd;
+    const disabled = !cwd;
+    const isActive = planTabs.some((tab) => tab.id === activeFileTabId) && rightPanelOpen;
+    return (
+      <button
+        type="button"
+        onClick={() => { if (cwd) handleOpenPlanPanel(cwd); }}
+        disabled={disabled}
+        aria-controls="file-panel"
+        aria-expanded={isActive}
+        title={translate("plan.open")}
+        aria-label={translate("plan.open")}
+        style={{
+          marginLeft: !sessionStats && !contextUsage ? "auto" : 0,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
+          background: isActive ? "var(--bg-selected)" : "none",
+          border: "none", borderLeft: "1px solid var(--border)",
+          color: isActive ? "var(--text)" : "var(--text-muted)",
+          cursor: disabled ? "default" : "pointer", flexShrink: 0,
+          opacity: disabled ? 0.35 : 1,
+          transition: "color 0.12s, background 0.12s",
+        }}
+        onMouseEnter={(event) => { if (!disabled) event.currentTarget.style.color = "var(--text)"; }}
+        onMouseLeave={(event) => { event.currentTarget.style.color = isActive ? "var(--text)" : "var(--text-muted)"; }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+          <rect x="9" y="3" width="6" height="4" rx="1" />
+          <path d="M9 12h6M9 16h4" />
+        </svg>
+      </button>
+    );
+  };
+
   const renderMainFileToggle = (mobile: boolean) => {
     const covered = mobile && isNarrowMobile && mobileToolbarMoreOpen;
     return (
@@ -1774,7 +1845,7 @@ export function AppShell() {
         aria-label={rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")}
         data-mobile-toolbar-file={mobile ? "true" : undefined}
         style={{
-          marginLeft: !mobile && !sessionStats && !contextUsage ? "auto" : 0,
+          marginLeft: mobile && isNarrowMobile && !sessionStats && !contextUsage ? "auto" : 0,
           display: "flex", alignItems: "center", justifyContent: "center",
           width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
           visibility: covered ? "hidden" : "visible",
@@ -2009,6 +2080,7 @@ export function AppShell() {
               )}
               {!isNarrowMobile && renderChatToolbarActions(true)}
               {renderSessionStatsButton(true)}
+              {!isNarrowMobile && renderPlanPanelToggle()}
               {renderMainFileToggle(true)}
               {isNarrowMobile && mobileToolbarMoreOpen && (
                 <div
@@ -2042,6 +2114,7 @@ export function AppShell() {
               {renderSessionStatsButton(false)}
             </>
           )}
+          {!isMobile && renderPlanPanelToggle()}
           {!isMobile && renderMainFileToggle(false)}
           {isMobile && sessionHasBranches && (
             <BranchNavigator
@@ -2469,9 +2542,9 @@ export function AppShell() {
           </button>
         </div>
 
-        {/* Only the active viewer is mounted. Lightweight per-tab state is restored on activation. */}
+        {/* Only the active viewer mounts a FileViewer; plan panels stay mounted (like terminals) so accordion state survives tab switches. */}
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
-          {activeFileTab?.filePath ? (
+          {!activePlanTab && (activeFileTab?.filePath ? (
             <FileViewer
               key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
               filePath={activeFileTab.filePath}
@@ -2499,7 +2572,17 @@ export function AppShell() {
             <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
                {translate("files.noneOpen")}
             </div>
-          ) : null}
+          ) : null)}
+          {planTabs.map((tab) => (
+            <div key={tab.id} hidden={tab.id !== activeFileTabId} style={{ width: "100%", height: "100%" }}>
+              <ProjectPlanPanel
+                cwd={tab.cwd}
+                active={rightPanelOpen && tab.id === activeFileTabId}
+                onOpenFile={handleOpenPlanFile}
+                onInsertPrompt={handleInsertPrompt}
+              />
+            </div>
+          ))}
           {terminalTabs.map((tab) => (
             <div key={tab.id} hidden={tab.id !== activeFileTabId} style={{ width: "100%", height: "100%" }}>
               <TerminalPanel
