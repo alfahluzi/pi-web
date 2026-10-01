@@ -50,6 +50,7 @@ For port and hostname, command-line options override the corresponding environme
 | `PI_WEB_ALLOWED_HOSTS` | Additional exact proxy or custom hostnames, comma-separated | Unset |
 | `PI_WEB_PASSWORD` | Enable browser password login; API clients may use Basic Auth with username `pi` | Authentication disabled |
 | `PI_WEB_IDLE_TIMEOUT_MS` | Session idle timeout in milliseconds, up to `2147483647`; `0` disables idle shutdown; invalid or out-of-range values use the default | `600000` (10 min) |
+| `PI_WEB_EXTENSION_MODE` | Extension run mode advertised to extensions as `ctx.mode`: `rpc` (default) or `tui`. Pi Web renders extension custom components as ANSI text, so `tui` lets terminal-oriented extensions (e.g. `@juicesharp/rpiv-ask-user-question`) show their rich custom UI instead of a dialog walker. | `rpc` |
 
 For example:
 

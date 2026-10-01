@@ -98,7 +98,8 @@ export interface ExtensionUiContextLike {
   input(title: string, placeholder?: string, opts?: DialogOptionsLike): Promise<string | undefined>;
   editor(title: string, prefill?: string, opts?: DialogOptionsLike): Promise<string | undefined>;
   notify(message: string, type?: "info" | "warning" | "error"): void;
-  onTerminalInput(): () => void;
+  /** Absent when the host has no raw terminal input stream (e.g. Pi Web). */
+  onTerminalInput?(): () => void;
   setStatus(key: string, text: string | undefined): void;
   setWorkingMessage(message?: string): void;
   setWorkingVisible(visible: boolean): void;

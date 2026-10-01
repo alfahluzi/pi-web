@@ -160,6 +160,33 @@ const COMMANDS_ALLOWED_DURING_SESSION_REPLACEMENT = new Set([
   "extension_ui_input",
 ]);
 
+/**
+ * Extension run mode advertised to extensions through `ctx.mode`.
+ *
+ * Pi Web renders extension custom components (and widgets) as ANSI text in the
+ * browser, so it can satisfy the `tui` contract for custom UI even though its
+ * dialogs travel over the RPC sub-protocol. Some extensions gate their rich
+ * terminal UI on `ctx.mode === "rpc"` and would otherwise fall back to a
+ * degraded dialog walker. Set `PI_WEB_EXTENSION_MODE=tui` to advertise `tui`;
+ * the default stays `rpc` so behavior is unchanged unless explicitly opted in.
+ */
+export type PiWebExtensionMode = "tui" | "rpc" | "json" | "print";
+
+/**
+ * Resolve the extension mode from `PI_WEB_EXTENSION_MODE`. Unset/invalid values
+ * fall back to `rpc` with a warning for an explicitly set but unusable value.
+ */
+export function resolveExtensionMode(
+  rawValue: string | undefined = process.env.PI_WEB_EXTENSION_MODE,
+): PiWebExtensionMode {
+  const value = rawValue?.trim();
+  if (value === "tui" || value === "rpc" || value === "json" || value === "print") return value;
+  if (value) console.warn(`[pi-web] invalid PI_WEB_EXTENSION_MODE "${value}", falling back to rpc`);
+  return "rpc";
+}
+
+const EXTENSION_MODE = resolveExtensionMode();
+
 export interface RpcSessionStartOptions {
   toolNames?: string[];
   initialModel?: { provider: string; modelId: string };
@@ -365,14 +392,14 @@ export class AgentSessionWrapper {
       if (typeof this.inner.bindExtensions === "function") {
         const bindExtensions = this.inner.bindExtensions as (bindings: {
           uiContext?: ExtensionUiContextLike;
-          mode?: "rpc";
+          mode?: PiWebExtensionMode;
           commandContextActions?: ExtensionCommandContextActionsLike;
           shutdownHandler?: () => void;
           onError?: (error: { extensionPath: string; event: string; error: string }) => void;
         }) => Promise<void>;
         await bindExtensions.call(this.inner, {
           uiContext,
-          mode: "rpc",
+          mode: EXTENSION_MODE,
           commandContextActions: this.createExtensionCommandContextActions(),
           shutdownHandler: () => this.emit({
             type: "extension_ui_request",
@@ -389,7 +416,7 @@ export class AgentSessionWrapper {
           }),
         });
       } else {
-        this.inner.extensionRunner.setUIContext?.(uiContext, "rpc");
+        this.inner.extensionRunner.setUIContext?.(uiContext, EXTENSION_MODE);
       }
       this.extensionsBound = true;
       console.log(`[pi-web] session_start dispatched to extensions for session ${this.inner.sessionId}`);
@@ -945,7 +972,7 @@ export class AgentSessionWrapper {
         await this.inner.reload();
         this.setActiveToolSelection(activeToolNames);
         if (typeof this.inner.bindExtensions !== "function") {
-          this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
+          this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), EXTENSION_MODE);
         }
         invalidateModelsCache();
         return { success: true };
@@ -1301,9 +1328,18 @@ export class AgentSessionWrapper {
     const resolved = typeof overlayOptions === "function" ? overlayOptions() : overlayOptions;
     if (!resolved || typeof resolved !== "object") return DEFAULT_CUSTOM_UI_COLUMNS;
     const width = (resolved as { width?: unknown }).width;
-    return typeof width === "number" && Number.isFinite(width)
-      ? Math.max(40, Math.min(140, Math.round(width)))
-      : 92;
+    if (typeof width === "number" && Number.isFinite(width)) {
+      return Math.max(40, Math.min(140, Math.round(width)));
+    }
+    // Extensions commonly request a percentage overlay width (e.g. "100%"). The
+    // panel is capped near 920px of 13px monospace, which is roughly 118 columns;
+    // map the percentage onto that so wide dialogs such as rpiv's side-by-side
+    // preview layout keep their intended geometry instead of falling back to 92.
+    if (typeof width === "string" && width.trim().endsWith("%")) {
+      const percent = Number.parseFloat(width);
+      if (Number.isFinite(percent)) return Math.max(40, Math.min(140, Math.round(percent * 1.18)));
+    }
+    return 92;
   }
 
   private emitCustomUiRender(id: string, custom: ActiveCustomUi): void {
@@ -1526,7 +1562,10 @@ export class AgentSessionWrapper {
           notifyType: type,
         } as ExtensionUiRequest as AgentEvent);
       },
-      onTerminalInput: () => () => {},
+      // Pi Web has no raw terminal input stream. Expose the method as absent so
+      // extensions reliably detect the capability gap instead of subscribing to a
+      // listener that never fires (e.g. rpiv-ask-user-question's collapse key).
+      onTerminalInput: undefined,
       setStatus: (key, text) => {
         if (text === undefined) this.extensionStatuses.delete(key);
         else this.extensionStatuses.set(key, text);
@@ -1634,7 +1673,7 @@ export class AgentSessionWrapper {
         this.syncProjectTrust();
         await this.inner.reload({
           beforeSessionStart: () => {
-            this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
+            this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), EXTENSION_MODE);
           },
         });
       },
