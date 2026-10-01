@@ -10,9 +10,11 @@ in the browser. It exists to support
 An unofficial fork of [`agegr/pi-web`](https://github.com/agegr/pi-web), which is
 MIT licensed (`Copyright (c) 2026 agegr` — see `LICENSE`, kept unchanged). MIT
 allows forking, modification, and redistribution provided the copyright notice
-and license text stay in place.
+and license text stay in place. This fork lives at
+[`alfahluzi/pi-web`](https://github.com/alfahluzi/pi-web).
 
-- `upstream` → `https://github.com/agegr/pi-web.git`, `origin` → this fork.
+- `origin` → `git@github.com:alfahluzi/pi-web.git` (this fork, `custom` branch).
+- `upstream` → `https://github.com/agegr/pi-web.git`.
 - `main` mirrors upstream releases: `git fetch upstream && git rebase upstream/main`.
 - `custom` carries the patches below, based on upstream tag `v0.9.3`.
 - Upstream release tags are annotated, so resolve a commit with `v0.9.3^{}`.
