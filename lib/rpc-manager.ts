@@ -31,6 +31,13 @@ import type {
 } from "./types";
 import { createHeadlessCustomUiTui, DEFAULT_CUSTOM_UI_COLUMNS, type HeadlessCustomUiTui } from "./custom-ui-terminal";
 import {
+  ASK_USER_QUESTION_TOOL_NAME,
+  cancelledQuestionnaireResult,
+  parseQuestionnaireArgs,
+  sanitizeQuestionnaireResult,
+  type QuestionnaireQuestion,
+} from "./questionnaire";
+import {
   createSubagentExtension,
   preferPiWebSubagentExtension,
 } from "./subagent-extension";
@@ -108,6 +115,16 @@ type ActiveCustomUi = {
   width: number;
   resolve: (value: unknown) => void;
   settled: boolean;
+};
+
+/**
+ * A `ui.custom()` request Pi Web answers with a native form instead of an
+ * extension component. `settle` resolves the extension's `ui.custom()` promise
+ * with the questionnaire result the extension then envelopes itself.
+ */
+type ActiveQuestionnaire = {
+  questions: QuestionnaireQuestion[];
+  settle: (value: unknown) => void;
 };
 
 type ExtensionUiRequestBody = Record<string, unknown> & {
@@ -332,6 +349,11 @@ export class AgentSessionWrapper {
   private pendingUiResponses = new Map<string, PendingUiResponse>();
   private pendingUiRequests = new Map<string, AgentEvent>();
   private activeCustomUis = new Map<string, ActiveCustomUi>();
+  private activeQuestionnaires = new Map<string, ActiveQuestionnaire>();
+  // The `ask_user_question` tool call whose `ui.custom()` request the next
+  // `ui.custom()` call belongs to. Set on tool start, cleared on tool end, so a
+  // stale marker cannot turn an unrelated extension dialog into a form.
+  private pendingQuestionnaire: { toolCallId: string; questions: QuestionnaireQuestion[] } | null = null;
   private extensionUiAbortController = new AbortController();
   private extensionStatuses = new Map<string, string>();
   private extensionWidgets = new Map<string, ExtensionWidgetItem>();
@@ -472,6 +494,7 @@ export class AgentSessionWrapper {
       // run at all, and the sidebar would keep the old one (#1237).
       if (event.type === "session_info_changed") invalidateSessionListCache();
       this.trackActiveToolEvent(event);
+      this.trackQuestionnaireEvent(event);
       if (IDLE_RESET_EVENT_TYPES.has(event.type)) this.resetIdleTimer();
       this.emit(event.type === "message_end" ? this.withTranscriptNotices(event) : event);
       if (event.type === "agent_settled") this.notifyAgentRunCompleteIfIdle();
@@ -522,6 +545,23 @@ export class AgentSessionWrapper {
       for (const id of this.activeToolEvents.keys()) {
         if (id.startsWith(nestedPrefix)) this.activeToolEvents.delete(id);
       }
+    }
+  }
+
+  /**
+   * Keep the running questionnaire call, so a client that reconnects mid-question
+   * can still render the option `preview` bodies. The tool arguments are their
+   * only source: the extension's public prompt event ships `hasPreview` alone.
+   */
+  private trackQuestionnaireEvent(event: AgentEvent): void {
+    const toolCallId = event.toolCallId;
+    if (typeof toolCallId !== "string") return;
+    if (event.type === "tool_execution_start") {
+      if (event.toolName !== ASK_USER_QUESTION_TOOL_NAME) return;
+      const questions = parseQuestionnaireArgs(event.args);
+      this.pendingQuestionnaire = questions ? { toolCallId, questions } : null;
+    } else if (event.type === "tool_execution_end") {
+      if (this.pendingQuestionnaire?.toolCallId === toolCallId) this.pendingQuestionnaire = null;
     }
   }
 
@@ -1343,6 +1383,11 @@ export class AgentSessionWrapper {
         return null;
       }
 
+      case "extension_ui_questionnaire": {
+        this.resolveQuestionnaireUi(command.id as string, command.result);
+        return null;
+      }
+
       case "set_auto_retry": {
         this.inner.setAutoRetryEnabled(command.enabled as boolean);
         return null;
@@ -1414,6 +1459,10 @@ export class AgentSessionWrapper {
     this.unsubscribe?.();
     for (const pending of this.pendingUiResponses.values()) pending.cancel();
     for (const id of Array.from(this.activeCustomUis.keys())) this.closeCustomUi(id, undefined);
+    for (const id of Array.from(this.activeQuestionnaires.keys())) {
+      this.settleQuestionnaireUi(id, cancelledQuestionnaireResult());
+    }
+    this.pendingQuestionnaire = null;
     this.pendingUiResponses.clear();
     this.pendingUiRequests.clear();
     this.activeToolEvents.clear();
@@ -1801,10 +1850,84 @@ export class AgentSessionWrapper {
     }
   }
 
+  /**
+   * Native questionnaire path: Pi Web answers the request itself, so the
+   * extension's component factory is never invoked. The factory is what builds
+   * the TUI session, and rendering it would only produce ANSI lines the user
+   * cannot click. The extension still owns validation and the LLM envelope.
+   */
+  private requestQuestionnaireUi<T>(questions: QuestionnaireQuestion[]): Promise<T> {
+    const stopSignal = this.extensionUiAbortController.signal;
+    if (stopSignal.aborted) return Promise.reject(stopSignal.reason);
+
+    const id = randomUUID();
+    return new Promise<T>((resolve, reject) => {
+      let completed = false;
+      const finish = (value: T) => {
+        if (completed) return;
+        completed = true;
+        stopSignal.removeEventListener("abort", onStop);
+        if (stopSignal.aborted) reject(stopSignal.reason);
+        else resolve(value);
+      };
+      const onStop = () => {
+        this.settleQuestionnaireUi(id, undefined);
+      };
+      stopSignal.addEventListener("abort", onStop, { once: true });
+
+      this.activeQuestionnaires.set(id, {
+        questions,
+        settle: (value) => finish(value as T),
+      });
+      const request = {
+        type: "extension_ui_request",
+        id,
+        method: "custom",
+        lines: [],
+        questionnaire: questions,
+      } as ExtensionUiRequest as AgentEvent;
+      // Registered like the ANSI path's render events so a browser that opens
+      // the session mid-question (page refresh, second tab) is replayed the
+      // pending request by `onEvent` instead of showing a stuck transcript.
+      this.pendingUiRequests.set(id, request);
+      this.emit(request);
+    });
+  }
+
+  private settleQuestionnaireUi(id: string, value: unknown): void {
+    const pending = this.activeQuestionnaires.get(id);
+    if (!pending) return;
+    this.activeQuestionnaires.delete(id);
+    this.pendingUiRequests.delete(id);
+    this.emit({
+      type: "extension_ui_request",
+      id,
+      method: "custom",
+      lines: [],
+      closed: true,
+    } as ExtensionUiRequest as AgentEvent);
+    pending.settle(value);
+  }
+
+  /** Browser answer for a native questionnaire; re-validated before it is used. */
+  private resolveQuestionnaireUi(id: string, rawResult: unknown): void {
+    const pending = this.activeQuestionnaires.get(id);
+    if (!pending) return;
+    this.settleQuestionnaireUi(id, sanitizeQuestionnaireResult(rawResult, pending.questions));
+  }
+
   private requestExtensionCustomUi<T>(
     factory: unknown,
     options?: unknown,
   ): Promise<T> {
+    // `ask_user_question` reports itself through `tool_execution_start` right
+    // before it calls `ui.custom()`, so the marker is unambiguous here.
+    const questionnaire = this.pendingQuestionnaire;
+    if (questionnaire) {
+      this.pendingQuestionnaire = null;
+      return this.requestQuestionnaireUi<T>(questionnaire.questions);
+    }
+
     if (typeof factory !== "function") return Promise.resolve(undefined as T);
 
     const stopSignal = this.extensionUiAbortController.signal;

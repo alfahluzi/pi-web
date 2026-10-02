@@ -96,6 +96,8 @@ app/api/
   push/config/route.ts             GET VAPID public key
   push/subscribe/route.ts          POST register a push subscription
   app-update/route.ts              GET current vs latest published pi-web version
+  web-panels/route.ts              GET [cwd] right-panel web panels declared by installed Pi packages
+  web-panels/[id]/[[...path]]/route.ts  GET a panel document + its relative assets from the owning package
 
 lib/
   agent-client.ts           typed fetch helper for /api/agent commands
@@ -179,6 +181,10 @@ lib/
   mcp-import.ts             pure paste importer (+ mcp-import-core/json/cli/links.ts)
   mcp-server-display.ts     client-safe display helpers for McpServerInfo (hidden-character escapes, labels)
   mcp-tool-display.ts       server/tool label of an mcp__ call from its result details, never the name
+  web-panel-manifest.ts     pure `package.json#piWeb` parsing, icon names, package-root containment
+  web-panel-bridge.ts       workspace-relative path resolution for panel `open-file`
+  web-panels.ts             installed-package panel registry behind /api/web-panels
+  questionnaire.ts          client-safe parsing of ask-user-question tool args and results
 
 components/
   AppShell.tsx             layout, URL state, tab management
@@ -217,7 +223,11 @@ components/
   FileIcons.tsx            file icon helpers
   FileViewer.tsx           file content in a tab
   DelimitedTable.tsx       a CSV/TSV file's Preview: virtualized table, gutter of file lines
-  TabBar.tsx               file panel tab bar (file, terminal and subagent tabs)
+  TabBar.tsx               file panel tab bar (file, terminal, subagent and plugin tabs)
+  WebPanelFrame.tsx        sandboxed iframe + postMessage bridge for a package panel
+  WebPanelIcon.tsx         named / custom SVG icons for panel buttons
+  web-panel-tab-state.ts   plugin tab identity + manifest reconciliation
+  QuestionnairePanel.tsx   native renderer for an ask-user-question dialog with previews
   TranscriptNotices.tsx    a message's cache and cost notice lines, the fold header's cache-miss text
 
 hooks/
@@ -261,6 +271,15 @@ Design decisions and traps live in `docs/agents/`, one note per area. Read every
 
 - `/` renders entirely on the client, so one script chunk the browser cannot parse is a blank page. Next 16 targets Safari 16.4+; the `browserslist` in `package.json` lowers Safari and iOS to 16.2 so SWC turns class `static {}` blocks into private static fields. That covers Next's client runtime; other node_modules keep their syntax unless listed in `transpilePackages` (mermaid and `@mermaid-js/parser` are, for their lazy diagram chunks). Keep the other browserslist entries at Next's defaults.
 - Never write a RegExp lookbehind (`(?<=`, `(?<!`) in client code: SWC cannot downlevel it and Safari parses it only from 16.4. `lib/markdown.ts` emulates its leading lookbehinds with `replaceNotPrecededBy()`. A lookbehind built at runtime (`new RegExp("(?<=…)")` in `try`) fails only when run; that is how `lib/gfm-autolink-email-loader.cjs` fixes `mdast-util-gfm-autolink-literal`'s email regex. The loader is registered for webpack and Turbopack in `next.config.ts` and fails the build if that regex changes upstream.
+
+### Package-provided right panels (`package.json#piWeb`)
+- Pi extensions run in Node and cannot render into the browser (`ctx.ui.custom()` returns `undefined` in RPC mode), so a package's browser UI is a **separate declaration**, not part of the extension API: `package.json#piWeb.panels` (see `docs/web-panels.md`, example in `examples/web-panel-plugin`).
+- `lib/web-panel-manifest.ts` is pure and unit tested: id/title/icon/entry validation, `iconSvgPath` restricted to path commands (never `<` or quotes), and lexical containment inside the package root. `lib/web-panels.ts` adds the SDK scan and a `realpath` containment check at read time — a package can ship a symlink pointing outside itself, so the lexical check alone is not enough.
+- The panel document is an iframe served from the package through `/api/web-panels/[id]/[...path]`, so a relative `<script src="./app.js">` resolves under the same prefix and a plugin needs no build step. It is served `no-store` (a plugin is edited while the dev server runs) and MIME-typed by extension.
+- The id→declaration map lives on `globalThis` and is cwd-independent because relative assets arrive without `?cwd=`. The list endpoint always rescans so an install or remove is visible on the next fetch; the asset route reads the map and only scans as a cold-start fallback.
+- Project-scope panels require project trust, and disabled packages are hidden, mirroring the Plugins panel. Ids are deduped case-insensitively; a project panel overrides a global one, and among equal scopes the first configured package wins.
+- Tabs use `kind: "plugin"`. `WebPanelFrame` loads the document once and pushes context changes over `postMessage` rather than changing `src` (a reload would drop plugin state). Bridge messages are accepted only from the frame's own `contentWindow` and the app origin. `pi-web:open-file` paths are resolved against the active cwd by `lib/web-panel-bridge.ts`, because browser code cannot apply Node path rules.
+- A panel runs with `allow-scripts allow-same-origin` — the same trust level as the package's Node extension, which already runs arbitrary code — so it is not a sandbox against a hostile plugin.
 
 ## Pi Session File Format
 

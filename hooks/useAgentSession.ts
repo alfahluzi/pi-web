@@ -34,6 +34,7 @@ import { getToolExecutionProgress } from "@/lib/tool-execution-progress";
 import { CODEMODE_TOOL_NAME, getCodemodeProgress } from "@/lib/codemode-view";
 import { updateExtensionWidgets } from "@/lib/extension-widgets";
 import { bareMcpOpensSettings } from "@/lib/mcp-command";
+import type { QuestionnaireResult } from "@/lib/questionnaire";
 import type { SettingsSection } from "@/lib/settings-navigation";
 import { withTranscriptNotices, type TranscriptNotice } from "@/lib/transcript-notices";
 import {
@@ -1132,6 +1133,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       });
     } catch (e) {
       console.error("Failed to send extension custom UI input:", e);
+    }
+  }, []);
+
+  const sendQuestionnaireResponse = useCallback(async (
+    request: ExtensionUiCustomRequest,
+    result: QuestionnaireResult,
+  ) => {
+    const sid = sessionIdRef.current;
+    // Clear locally so the form disappears with the click; the wrapper also
+    // emits its own `closed` update, which is a no-op once the id is gone.
+    setExtensionCustomUi((current) => current?.id === request.id ? null : current);
+    if (!sid) return;
+    try {
+      await sendAgentCommand(sid, {
+        type: "extension_ui_questionnaire",
+        id: request.id,
+        result,
+      });
+    } catch (e) {
+      console.error("Failed to send questionnaire result:", e);
     }
   }, []);
 
@@ -2771,7 +2792,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, sessionStats, autoCompactionEnabled,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices: noticeState.visible, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    notices: noticeState.visible, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, sendQuestionnaireResponse,
     isAutoModelSelection: isNew && newSessionModel === null,
     isAutoThinkingSelection: isNew && newSessionThinkingLevel === null,
     defaultModel: newSessionDefaultModel,

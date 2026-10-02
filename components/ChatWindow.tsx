@@ -19,6 +19,7 @@ import { MarkdownBody } from "./MarkdownBody";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
+import { QuestionnairePanel } from "./QuestionnairePanel";
 import { AnsiText } from "./AnsiText";
 import { useI18n } from "@/hooks/useI18n";
 import { phaseLabel } from "@/lib/chat-phase-label";
@@ -282,7 +283,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, modelSwitching, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, setNoticePaused, addNotice,
+    notices, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, sendQuestionnaireResponse, setNoticePaused, addNotice,
     isAutoModelSelection,
     isAutoThinkingSelection,
     defaultModel,
@@ -1077,7 +1078,15 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
           <ExtensionDialog key={extensionDialog.id} request={extensionDialog} waitingCount={waitingExtensionDialogCount} onRespond={respondToExtensionUi} />
         )}
         {extensionCustomUi && (
-          <ExtensionCustomPanel key={extensionCustomUi.id} request={extensionCustomUi} waitingCount={waitingExtensionCustomUiCount} onInput={sendExtensionCustomInput} />
+          extensionCustomUi.questionnaire ? (
+            <QuestionnairePanel
+              key={extensionCustomUi.id}
+              questions={extensionCustomUi.questionnaire}
+              onSubmit={(result) => void sendQuestionnaireResponse(extensionCustomUi, result)}
+            />
+          ) : (
+            <ExtensionCustomPanel key={extensionCustomUi.id} request={extensionCustomUi} waitingCount={waitingExtensionCustomUiCount} onInput={sendExtensionCustomInput} />
+          )
         )}
         {!isEmptyNew && <>
         <div

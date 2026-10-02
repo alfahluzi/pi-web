@@ -1,5 +1,7 @@
 // Types mirrored from pi-mono coding-agent session-manager
 
+import type { QuestionnaireQuestion } from "./questionnaire";
+
 export interface SessionHeader {
   type: "session";
   version?: number;
@@ -213,6 +215,12 @@ export type ExtensionUiRequest =
       method: "custom";
       lines: string[];
       closed?: boolean;
+      /**
+       * Present when Pi Web renders the request as a native questionnaire
+       * instead of ANSI lines (see `lib/questionnaire.ts`). `lines` is then
+       * empty and no extension component is mounted. Not a `closed` update.
+       */
+      questionnaire?: QuestionnaireQuestion[];
     };
 
 export type BlockingExtensionUiRequest = Extract<

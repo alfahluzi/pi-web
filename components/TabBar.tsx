@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { getFileIcon } from "./FileIcons";
+import { WebPanelIcon } from "./WebPanelIcon";
 import { useI18n } from "@/hooks/useI18n";
 import type { FileViewerDisplayMode, FileViewerState } from "@/lib/file-viewer-state";
 
@@ -9,7 +10,7 @@ export interface Tab {
   id: string;
   label: string;
   filePath: string;
-  kind?: "terminal" | "agent" | "plan";
+  kind?: "terminal" | "agent" | "plugin";
   closing?: boolean;
   sourceSessionId?: string | null;
   initialDisplayMode?: FileViewerDisplayMode;
@@ -17,6 +18,10 @@ export interface Tab {
   page?: number;
   viewerState?: FileViewerState;
   viewerRevision?: number;
+  /** Named icon for a `plugin` tab. */
+  icon?: string;
+  /** Custom 24×24 path `d` for a `plugin` tab, validated server-side. */
+  iconSvgPath?: string;
 }
 
 interface Props {
@@ -52,7 +57,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
           <div
             key={tab.id}
             role="tab"
-            aria-label={tab.kind === "terminal" ? t("terminal.tabLabel", { name: tab.label }) : tab.kind === "agent" ? t("subagent.tabLabel", { name: tab.label }) : tab.kind === "plan" ? t("plan.tabLabel") : tab.label}
+            aria-label={tab.kind === "terminal" ? t("terminal.tabLabel", { name: tab.label }) : tab.kind === "agent" ? t("subagent.tabLabel", { name: tab.label }) : tab.label}
             aria-selected={isActive}
             tabIndex={isActive || (!activeTabId && tabs[0].id === tab.id) ? 0 : -1}
             onKeyDown={(event) => {
@@ -103,12 +108,8 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
                 </svg>
-              ) : tab.kind === "plan" ? (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
-                  <rect x="9" y="3" width="6" height="4" rx="1" />
-                  <path d="M9 12h6M9 16h4" />
-                </svg>
+              ) : tab.kind === "plugin" ? (
+                <WebPanelIcon name={tab.icon} svgPath={tab.iconSvgPath} size={13} />
               ) : tab.kind === "agent" ? (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" />

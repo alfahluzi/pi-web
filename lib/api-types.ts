@@ -901,3 +901,28 @@ export interface PluginToggleResult {
 export interface PluginsBulkResponse extends PluginsResponse {
   results: PluginToggleResult[];
 }
+
+/** A right-panel entry declared by an installed Pi package under `package.json#piWeb`. */
+export interface WebPanelInfo {
+  id: string;
+  title: string;
+  icon?: string;
+  iconSvgPath?: string;
+  order: number;
+  /** Asset URL of the panel document, served from the owning package. */
+  url: string;
+  source: string;
+  scope: PluginScope;
+  packageName?: string;
+}
+
+export interface WebPanelDiagnostic {
+  type: "warning" | "error";
+  source?: string;
+  message: string;
+}
+
+export interface WebPanelsResponse {
+  panels: WebPanelInfo[];
+  diagnostics: WebPanelDiagnostic[];
+}
