@@ -1,0 +1,25 @@
+/* Match the host theme by using the CSS variables pi-web defines on :root. */
+body {
+  margin: 0;
+  padding: 16px;
+  font: 13px/1.6 system-ui, sans-serif;
+  background: var(--bg, #fff);
+  color: var(--text, #111);
+}
+h1 { font-size: 15px; margin: 0 0 8px; }
+p { color: var(--text-muted, #666); margin: 0 0 12px; }
+dl { display: grid; grid-template-columns: 120px 1fr; gap: 4px 8px; margin: 0 0 16px; }
+dt { color: var(--text-muted, #777); }
+dd { margin: 0; font-family: ui-monospace, SFMono-Regular, monospace; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+button {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #d4d4d8);
+  border-radius: 6px;
+  background: var(--bg-panel, #f4f4f5);
+  color: inherit;
+  cursor: pointer;
+}
+button:hover { background: var(--bg-hover, #e4e4e7); }
+#status { margin-top: 12px; min-height: 18px; color: var(--accent, #2563eb); }

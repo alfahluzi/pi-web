@@ -17,8 +17,10 @@ import { ToolDefinitionsPanel } from "./ToolDefinitionsPanel";
 import { AgentSessionPanel } from "./AgentSessionPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { newTerminalTab, restoreTerminalTabs, TERMINAL_TABS_KEY, type TerminalTab } from "./terminal-tab-state";
-import { ProjectPlanPanel } from "./ProjectPlanPanel";
-import { newPlanTab, type PlanTab } from "./project-plan-tab-state";
+import { WebPanelFrame } from "./WebPanelFrame";
+import { WebPanelIcon } from "./WebPanelIcon";
+import { newWebPanelTab, reconcileWebPanelTab, webPanelTabId, type WebPanelTab } from "./web-panel-tab-state";
+import { resolveWebPanelPath } from "@/lib/web-panel-bridge";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile, useIsNarrowMobile } from "@/hooks/useIsMobile";
@@ -57,7 +59,7 @@ import {
   SIDEBAR_MIN_WIDTH,
 } from "@/lib/panel-layout";
 import type { BlockingExtensionUiRequest, SessionInfo, SessionTreeNode } from "@/lib/types";
-import type { ProjectTrustStatus } from "@/lib/api-types";
+import type { ProjectTrustStatus, WebPanelInfo } from "@/lib/api-types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import type { FileViewerState } from "@/lib/file-viewer-state";
@@ -84,7 +86,7 @@ export function AppShell() {
   const searchParams = useSearchParams();
   const [initialNavigation, setInitialNavigation] = useState(() => getInitialNavigation(searchParams));
   // Keep the system-theme subscription mounted for the lifetime of the app.
-  useTheme();
+  const { theme } = useTheme();
   const { locale, t: translate } = useI18n();
   const isMobile = useIsMobile();
   const isNarrowMobile = useIsNarrowMobile();
@@ -463,13 +465,17 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
-  const [planTabs, setPlanTabs] = useState<PlanTab[]>([]);
+  // Package-provided right panels, discovered from installed Pi packages.
+  const [webPanels, setWebPanels] = useState<WebPanelInfo[]>([]);
+  const [webPanelTabs, setWebPanelTabs] = useState<WebPanelTab[]>([]);
   const [terminalsRestored, setTerminalsRestored] = useState(false);
-  const panelTabs: Tab[] = [...fileTabs, ...planTabs.map((tab) => ({
+  const panelTabs: Tab[] = [...fileTabs, ...webPanelTabs.map((tab) => ({
     id: tab.id,
-    label: translate("plan.tabLabel"),
-    filePath: tab.cwd,
-    kind: "plan" as const,
+    label: tab.title,
+    filePath: tab.url,
+    kind: "plugin" as const,
+    icon: tab.icon,
+    iconSvgPath: tab.iconSvgPath,
   })), ...terminalTabs.map((tab) => ({
     id: tab.id,
     label: getFileName(tab.cwd) || tab.cwd,
@@ -1074,34 +1080,38 @@ export function AppShell() {
     if (isMobile) setSidebarOpen(false);
   }, [terminalTabs, isMobile]);
 
-  const handleOpenPlanPanel = useCallback((cwd: string) => {
-    const tab = newPlanTab(cwd);
-    setPlanTabs((tabs) => tabs.some((existing) => existing.id === tab.id) ? tabs : [...tabs, tab]);
+  const handleOpenWebPanel = useCallback((panel: WebPanelInfo) => {
+    const tab = newWebPanelTab(panel);
+    setWebPanelTabs((tabs) => tabs.some((existing) => existing.id === tab.id)
+      ? tabs.map((existing) => existing.id === tab.id ? reconcileWebPanelTab(existing, panel) : existing)
+      : [...tabs, tab]);
     setActiveFileTabId(tab.id);
     setRightPanelOpen(true);
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
+  const handleWebPanelTitleChange = useCallback((tabId: string, title: string) => {
+    setWebPanelTabs((tabs) => tabs.map((tab) => (
+      tab.id === tabId ? { ...tab, title, titleOverride: title } : tab
+    )));
+  }, []);
+
   const handleInsertPrompt = useCallback((prompt: string) => {
     chatInputRef.current?.insertText(prompt);
   }, []);
-
-  const handleOpenPlanFile = useCallback((filePath: string, fileName: string) => {
-    handleOpenFile(filePath, fileName, { sourceSessionId: selectedSession?.id ?? null });
-  }, [handleOpenFile, selectedSession?.id]);
 
   const handleTerminalClosed = (tab: TerminalTab) => {
     const replacement = tab.closing === "restart" ? newTerminalTab(tab.cwd) : null;
     const remaining = terminalTabs.filter((item) => item.id !== tab.id);
     setTerminalTabs((tabs) => tabs.flatMap((item) => item.id !== tab.id ? [item] : replacement ? [replacement] : []));
     setActiveFileTabId((current) => current !== tab.id ? current : replacement?.id ?? remaining.at(-1)?.id ?? fileTabs.at(-1)?.id ?? null);
-    if (!replacement && !remaining.length && !fileTabs.length && !planTabs.length) setRightPanelOpen(false);
+    if (!replacement && !remaining.length && !fileTabs.length && !webPanelTabs.length) setRightPanelOpen(false);
   };
 
   const handleCloseFileTab = useCallback((tabId: string) => {
-    if (planTabs.some((tab) => tab.id === tabId)) {
-      const remaining = planTabs.filter((tab) => tab.id !== tabId);
-      setPlanTabs(remaining);
+    if (webPanelTabs.some((tab) => tab.id === tabId)) {
+      const remaining = webPanelTabs.filter((tab) => tab.id !== tabId);
+      setWebPanelTabs(remaining);
       setActiveFileTabId((cur) => {
         if (cur !== tabId) return cur;
         return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? fileTabs.at(-1)?.id ?? null;
@@ -1115,15 +1125,15 @@ export function AppShell() {
     }
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0 && terminalTabs.length === 0 && planTabs.length === 0) setRightPanelOpen(false);
+      if (next.length === 0 && terminalTabs.length === 0 && webPanelTabs.length === 0) setRightPanelOpen(false);
       return next;
     });
     setActiveFileTabId((cur) => {
       if (cur !== tabId) return cur;
       const remaining = fileTabs.filter((t) => t.id !== tabId);
-      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? planTabs.at(-1)?.id ?? null;
+      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? null;
     });
-  }, [fileTabs, terminalTabs, planTabs]);
+  }, [fileTabs, terminalTabs, webPanelTabs]);
 
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;
@@ -1169,6 +1179,49 @@ export function AppShell() {
     return () => controller.abort();
   }, [projectTrustCwd]);
 
+  // Package-provided right panels. Refetched on workspace change and after the
+  // Settings panel closes (modelsRefreshKey), since that is where packages are
+  // installed, removed or disabled.
+  useEffect(() => {
+    const controller = new AbortController();
+    const query = projectTrustCwd ? `?cwd=${encodeURIComponent(projectTrustCwd)}` : "";
+    fetch(`/api/web-panels${query}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.json() as { panels?: WebPanelInfo[] };
+      })
+      .then((data) => setWebPanels(Array.isArray(data.panels) ? data.panels : []))
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        console.error("Failed to load web panels:", error);
+      });
+    return () => controller.abort();
+  }, [projectTrustCwd, modelsRefreshKey]);
+
+  // Keep open panel tabs pointed at the latest manifest (title/url/icon).
+  useEffect(() => {
+    if (webPanels.length === 0) return;
+    const byId = new Map(webPanels.map((panel) => [panel.id, panel]));
+    setWebPanelTabs((tabs) => {
+      let changed = false;
+      const next = tabs.map((tab) => {
+        const panel = byId.get(tab.panelId);
+        if (!panel) return tab;
+        const reconciled = reconcileWebPanelTab(tab, panel);
+        if (
+          reconciled.url !== tab.url
+          || reconciled.title !== tab.title
+          || reconciled.icon !== tab.icon
+          || reconciled.iconSvgPath !== tab.iconSvgPath
+        ) {
+          changed = true;
+        }
+        return reconciled;
+      });
+      return changed ? next : tabs;
+    });
+  }, [webPanels]);
+
   const handleTrustProject = useCallback(async () => {
     if (!projectTrustCwd || projectTrustBusy) return;
     setProjectTrustBusy(true);
@@ -1193,7 +1246,7 @@ export function AppShell() {
   }, [projectTrustBusy, projectTrustCwd]);
 
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
-  const activePlanTab = planTabs.find((tab) => tab.id === activeFileTabId) ?? null;
+  const activeWebPanelTab = webPanelTabs.find((tab) => tab.id === activeFileTabId) ?? null;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
 
@@ -1794,39 +1847,44 @@ export function AppShell() {
     );
   };
 
-  const renderPlanPanelToggle = () => {
-    const cwd = projectTrustCwd;
-    const disabled = !cwd;
-    const isActive = planTabs.some((tab) => tab.id === activeFileTabId) && rightPanelOpen;
+  const renderWebPanelToggles = (mobile: boolean) => {
+    if (webPanels.length === 0) return null;
     return (
-      <button
-        type="button"
-        onClick={() => { if (cwd) handleOpenPlanPanel(cwd); }}
-        disabled={disabled}
-        aria-controls="file-panel"
-        aria-expanded={isActive}
-        title={translate("plan.open")}
-        aria-label={translate("plan.open")}
-        style={{
-          marginLeft: !sessionStats && !contextUsage ? "auto" : 0,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
-          background: isActive ? "var(--bg-selected)" : "none",
-          border: "none", borderLeft: "1px solid var(--border)",
-          color: isActive ? "var(--text)" : "var(--text-muted)",
-          cursor: disabled ? "default" : "pointer", flexShrink: 0,
-          opacity: disabled ? 0.35 : 1,
-          transition: "color 0.12s, background 0.12s",
-        }}
-        onMouseEnter={(event) => { if (!disabled) event.currentTarget.style.color = "var(--text)"; }}
-        onMouseLeave={(event) => { event.currentTarget.style.color = isActive ? "var(--text)" : "var(--text-muted)"; }}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
-          <rect x="9" y="3" width="6" height="4" rx="1" />
-          <path d="M9 12h6M9 16h4" />
-        </svg>
-      </button>
+      <>
+        {webPanels.map((panel) => {
+          const tabId = webPanelTabId(panel.id);
+          const isActive = rightPanelOpen && activeFileTabId === tabId;
+          return (
+            <button
+              key={panel.id}
+              type="button"
+              onClick={() => handleOpenWebPanel(panel)}
+              title={panel.title}
+              aria-label={panel.title}
+              aria-controls="file-panel"
+              aria-expanded={isActive}
+              data-mobile-toolbar-action={mobile ? `web-panel:${panel.id}` : undefined}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                width: mobile ? TOP_BAR_ICON_BUTTON_SIZE : undefined,
+                height: "100%", padding: mobile ? 0 : "0 12px",
+                background: isActive ? "var(--bg-selected)" : "none",
+                border: "none",
+                borderTop: isActive ? "2px solid var(--accent)" : "2px solid transparent",
+                borderLeft: "1px solid var(--border)",
+                color: isActive ? "var(--text)" : "var(--text-muted)",
+                cursor: "pointer", flexShrink: 0, fontSize: 11, whiteSpace: "nowrap",
+                transition: "color 0.1s, background 0.1s",
+              }}
+              onMouseEnter={(event) => { event.currentTarget.style.color = "var(--text)"; }}
+              onMouseLeave={(event) => { event.currentTarget.style.color = isActive ? "var(--text)" : "var(--text-muted)"; }}
+            >
+              <WebPanelIcon name={panel.icon} svgPath={panel.iconSvgPath} size={mobile ? 15 : 16} />
+              {!mobile && <span>{panel.title}</span>}
+            </button>
+          );
+        })}
+      </>
     );
   };
 
@@ -2080,7 +2138,7 @@ export function AppShell() {
               )}
               {!isNarrowMobile && renderChatToolbarActions(true)}
               {renderSessionStatsButton(true)}
-              {!isNarrowMobile && renderPlanPanelToggle()}
+              {renderWebPanelToggles(true)}
               {renderMainFileToggle(true)}
               {isNarrowMobile && mobileToolbarMoreOpen && (
                 <div
@@ -2114,7 +2172,7 @@ export function AppShell() {
               {renderSessionStatsButton(false)}
             </>
           )}
-          {!isMobile && renderPlanPanelToggle()}
+          {!isMobile && renderWebPanelToggles(false)}
           {!isMobile && renderMainFileToggle(false)}
           {isMobile && sessionHasBranches && (
             <BranchNavigator
@@ -2542,9 +2600,9 @@ export function AppShell() {
           </button>
         </div>
 
-        {/* Only the active viewer mounts a FileViewer; plan panels stay mounted (like terminals) so accordion state survives tab switches. */}
+        {/* Only the active viewer mounts a FileViewer; plugin panels stay mounted (like terminals) so their state survives tab switches. */}
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
-          {!activePlanTab && (activeFileTab?.filePath ? (
+          {!activeWebPanelTab && (activeFileTab?.filePath ? (
             <FileViewer
               key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
               filePath={activeFileTab.filePath}
@@ -2573,13 +2631,15 @@ export function AppShell() {
                {translate("files.noneOpen")}
             </div>
           ) : null)}
-          {planTabs.map((tab) => (
+          {webPanelTabs.map((tab) => (
             <div key={tab.id} hidden={tab.id !== activeFileTabId} style={{ width: "100%", height: "100%" }}>
-              <ProjectPlanPanel
-                cwd={tab.cwd}
-                active={rightPanelOpen && tab.id === activeFileTabId}
-                onOpenFile={handleOpenPlanFile}
+              <WebPanelFrame
+                url={tab.url}
+                title={tab.title}
+                context={{ cwd: projectTrustCwd, sessionId: selectedSession?.id ?? null, theme }}
+                onOpenFile={(path) => handleOpenLinkedFile(resolveWebPanelPath(path, projectTrustCwd))}
                 onInsertPrompt={handleInsertPrompt}
+                onTitleChange={(title) => handleWebPanelTitleChange(tab.id, title)}
               />
             </div>
           ))}

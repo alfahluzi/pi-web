@@ -1,0 +1,16 @@
+{
+  "name": "pi-web-panel-example",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Example Pi package that adds a right panel to pi-web.",
+  "piWeb": {
+    "panels": [
+      {
+        "id": "example",
+        "title": "Example Panel",
+        "icon": "clipboard",
+        "entry": "panel/index.html"
+      }
+    ]
+  }
+}

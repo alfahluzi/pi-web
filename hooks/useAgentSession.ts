@@ -30,6 +30,7 @@ import { AgentEventConnection } from "@/lib/agent-event-connection";
 import { isSystemMessageEvent } from "@/lib/agent-event-wire";
 import { getToolExecutionProgress } from "@/lib/tool-execution-progress";
 import { updateExtensionWidgets } from "@/lib/extension-widgets";
+import type { QuestionnaireResult } from "@/lib/questionnaire";
 import {
   CHAT_SCROLL_REATTACH_TOLERANCE,
   CHAT_SCROLL_TAIL_TOLERANCE,
@@ -965,6 +966,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       });
     } catch (e) {
       console.error("Failed to send extension custom UI input:", e);
+    }
+  }, []);
+
+  const sendQuestionnaireResponse = useCallback(async (
+    request: ExtensionUiCustomRequest,
+    result: QuestionnaireResult,
+  ) => {
+    const sid = sessionIdRef.current;
+    // Clear locally so the form disappears with the click; the wrapper also
+    // emits its own `closed` update, which is a no-op once the id is gone.
+    setExtensionCustomUi((current) => current?.id === request.id ? null : current);
+    if (!sid) return;
+    try {
+      await sendAgentCommand(sid, {
+        type: "extension_ui_questionnaire",
+        id: request.id,
+        result,
+      });
+    } catch (e) {
+      console.error("Failed to send questionnaire result:", e);
     }
   }, []);
 
@@ -2437,7 +2458,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, sessionStats, autoCompactionEnabled,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, sendQuestionnaireResponse,
     isAutoModelSelection: isNew && newSessionModel === null,
     isAutoThinkingSelection: isNew && newSessionThinkingLevel === null,
     agentPhase,

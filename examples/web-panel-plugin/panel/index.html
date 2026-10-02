@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Example Panel</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <h1>Example Panel</h1>
+  <p>This document is served from the package itself and embedded in pi-web's right panel.</p>
+
+  <dl>
+    <dt>cwd</dt><dd id="cwd">(waiting)</dd>
+    <dt>sessionId</dt><dd id="session">(waiting)</dd>
+    <dt>theme</dt><dd id="theme">(waiting)</dd>
+    <dt>context messages</dt><dd id="seen">0</dd>
+  </dl>
+
+  <div class="actions">
+    <button id="open-file" type="button">Open package.json</button>
+    <button id="insert-prompt" type="button">Insert prompt</button>
+    <button id="set-title" type="button">Rename tab</button>
+  </div>
+  <div id="status"></div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

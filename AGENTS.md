@@ -93,6 +93,8 @@ app/api/
   push/config/route.ts            GET VAPID public key for push subscriptions
   push/subscribe/route.ts         POST register a push subscription
   tools/settings/route.ts         GET/PUT shell tool settings (PowerShell on Windows)
+  web-panels/route.ts             GET [cwd] right-panel web panels declared by installed Pi packages
+  web-panels/[id]/[[...path]]/route.ts  GET a panel document + its relative assets from the owning package
 
 lib/
   agent-client.ts      typed fetch helper for /api/agent commands
@@ -111,6 +113,9 @@ lib/
   subagent-settings.ts  read/write ~/.pi/agent/agents/settings.json
   tool-presets.ts     PRESET_NONE/READ_ONLY/DEFAULT/FULL + getPresetFromTools()
   tool-preset-preference.ts  browser-persisted default for fresh sessions
+  web-panel-manifest.ts  pure `package.json#piWeb` parsing, icon names, package-root containment
+  web-panel-bridge.ts    workspace-relative path resolution for panel `open-file`
+  web-panels.ts          installed-package panel registry behind `/api/web-panels`
   types.ts            shared TypeScript types
   normalize.ts        normalizeToolCalls() — field name mismatch between file format and our types
   worktree.ts         project/worktree resolution and git worktree operations
@@ -133,6 +138,9 @@ components/
   FileIcons.tsx       file icon helpers
   FileViewer.tsx      file content in a tab
   TabBar.tsx          tab bar (Chat + open file tabs)
+  WebPanelFrame.tsx   sandboxed iframe + postMessage bridge for a package panel
+  WebPanelIcon.tsx    named / custom SVG icons for panel buttons
+  web-panel-tab-state.ts  plugin tab identity + manifest reconciliation
 
 hooks/
   useAgentSession.ts  messages + streaming + SSE + fork/navigate/reconciliation logic
@@ -261,6 +269,15 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 
 ### Exported session HTML
 - `/api/sessions/[id]/export` delegates to pi's export helper, then patches recursive tree helpers in the generated HTML to iterative versions so very deep linear sessions do not overflow the browser call stack.
+
+### Package-provided right panels (`package.json#piWeb`)
+- Pi extensions run in Node and cannot render into the browser (`ctx.ui.custom()` returns `undefined` in RPC mode), so a package's browser UI is a **separate declaration**, not part of the extension API: `package.json#piWeb.panels` (see `docs/web-panels.md`, example in `examples/web-panel-plugin`).
+- `lib/web-panel-manifest.ts` is pure and unit tested: id/title/icon/entry validation, `iconSvgPath` restricted to path commands (never `<` or quotes), and lexical containment inside the package root. `lib/web-panels.ts` adds the SDK scan and a `realpath` containment check at read time — a package can ship a symlink pointing outside itself, so the lexical check alone is not enough.
+- The panel document is an iframe served from the package through `/api/web-panels/[id]/[...path]`, so a relative `<script src="./app.js">` resolves under the same prefix and a plugin needs no build step. It is served `no-store` (a plugin is edited while the dev server runs) and MIME-typed by extension.
+- The id→declaration map lives on `globalThis` and is cwd-independent because relative assets arrive without `?cwd=`. The list endpoint always rescans so an install or remove is visible on the next fetch; the asset route reads the map and only scans as a cold-start fallback.
+- Project-scope panels require project trust, and disabled packages are hidden, mirroring the Plugins panel. Ids are deduped case-insensitively; a project panel overrides a global one, and among equal scopes the first configured package wins.
+- Tabs use `kind: "plugin"`. `WebPanelFrame` loads the document once and pushes context changes over `postMessage` rather than changing `src` (a reload would drop plugin state). Bridge messages are accepted only from the frame's own `contentWindow` and the app origin. `pi-web:open-file` paths are resolved against the active cwd by `lib/web-panel-bridge.ts`, because browser code cannot apply Node path rules.
+- A panel runs with `allow-scripts allow-same-origin` — the same trust level as the package's Node extension, which already runs arbitrary code — so it is not a sandbox against a hostile plugin.
 
 ## Pi Session File Format
 
