@@ -14,6 +14,7 @@ import {
   getRunningRpcSessionIds,
 } from "@/lib/rpc-manager";
 import { startServerPerf } from "@/lib/perf";
+import { readPinnedSessionIds } from "@/lib/session-pins";
 
 export const dynamic = "force-dynamic";
 

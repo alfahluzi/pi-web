@@ -12,7 +12,7 @@ test("lightweight source rows are skipped for highlighted, diff, and preview vie
   const viewer = file.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "TextFileViewer");
   const calculations = viewer.body.statements.filter((node) =>
     ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) =>
-      ["isDelimitedTable", "viewerContent", "sourceLines", "language", "isHtml", "isMarkdown", "hasPreview", "effectiveDisplayMode", "useLightweightSource", "lightweightSourceLines"].includes(declaration.name.getText(file)),
+      ["isDelimitedTable", "viewerContent", "sourceLines", "language", "isHtml", "isMarkdown", "hasPreview", "canEdit", "effectiveDisplayMode", "useLightweightSource", "lightweightSourceLines"].includes(declaration.name.getText(file)),
     ),
   ).map((node) => node.getText(file)).join("\n");
   const { outputText } = ts.transpileModule(`
@@ -136,4 +136,83 @@ test("the line-number gutter is pinned only in views of at most SOURCE_HIGHLIGHT
   // The gutter repeats the code line's height in px, so a code-font change
   // without it puts the numbers off the line boxes they belong to.
   assert.equal(parseFloat(numberStyle.lineHeight), Number((codeStyle.fontSize * codeStyle.lineHeight).toFixed(1)));
+test("file viewer state and display labels expose edit mode", async () => {
+  const stateSource = await readFile(new URL("../lib/file-viewer-state.ts", import.meta.url), "utf8");
+  assert.match(stateSource, /export type FileViewerDisplayMode = "source" \| "preview" \| "diff" \| "edit";/);
+  assert.match(stateSource, /draft\?: string \| null;/);
+
+  assert.match(source, /edit: "Edit",/);
+  assert.match(source, /"read" \| "download" \| "meta" \| "preview" \| "watch" \| "write"/);
+  assert.match(source, /interface FileData \{[\s\S]*?revision: string;/);
+  assert.match(source, /const useLightweightSource = sourceLines\.length > SOURCE_HIGHLIGHT_MAX_LINES\n\s+&& !\(effectiveDisplayMode === "edit"\)/);
+});
+
+test("edit mode is gated by canEdit and falls back to source", () => {
+  assert.match(source, /const canEdit = !data\?\.truncated && !isDeletedDiff;/);
+  assert.match(source, /disabled=\{!canEdit\}/);
+  assert.match(source, /t\("i18n\.fileTooLargeToEdit"\)/);
+  assert.match(source, /t\("i18n\.edit"\)/);
+
+  // Execute the gating calculations without mounting the file-fetching component.
+  const file = ts.createSourceFile("FileViewer.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const viewer = file.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "TextFileViewer");
+  const calculations = viewer.body.statements.filter((node) =>
+    ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) =>
+      ["canEdit", "effectiveDisplayMode"].includes(declaration.name.getText(file)),
+    ),
+  ).map((node) => node.getText(file)).join("\n");
+  const { outputText } = ts.transpileModule(`
+    return (data, displayMode, isDeletedDiff = false) => {
+      ${calculations}
+      return effectiveDisplayMode;
+    };
+  `, { compilerOptions: { jsx: ts.JsxEmit.React } });
+  const compute = new Function(outputText)();
+
+  assert.equal(compute({ content: "x", truncated: false }, "edit", false), "edit");
+  assert.equal(compute({ content: "x", truncated: true }, "edit", false), "source");
+  assert.equal(compute({ content: "x", truncated: false }, "edit", true), "diff");
+});
+
+test("saving PUTs the buffer with its base revision", () => {
+  assert.match(source, /getFileApiUrl\(filePath, "write", sourceSessionId\)/);
+  assert.match(source, /method: "PUT"/);
+  assert.match(source, /body: JSON\.stringify\(\{ content, baseRevision: revisionRef\.current \}\)/);
+  assert.match(source, /if \(response\.status === 409\)/);
+  assert.match(source, /setBanner\("stale"\)/);
+});
+
+test("live change never clobbers a dirty buffer", () => {
+  assert.match(source, /const synchronize = \(notifyExternal = false\) => \{\n\s+if \(dirtyRef\.current\) \{\n\s+if \(notifyExternal\) setBanner\("external"\);\n\s+\} else \{\n\s+void fetchContent\(filePath\)\.then/);
+  assert.match(source, /es\.addEventListener\("change", \(\) => synchronize\(true\)\)/);
+  assert.match(source, /void fetchGitDiff\(filePath\)/);
+});
+
+test("draft is persisted in viewer state and cleared on save", () => {
+  assert.match(source, /viewerStateRef\.current\.draft = isDirty \? next : null;/);
+  assert.match(source, /viewerStateRef\.current\.draft = null;/);
+  assert.match(source, /applyDiskContent\(d\.content, d\.revision, false\)/);
+});
+
+test("viewer state reset preserves the restored draft across remounts", () => {
+  // The useRef initializer must seed the draft so a freshly mounted viewer
+  // starts with the tab's persisted draft instead of an undefined draft.
+  assert.match(
+    source,
+    /const viewerStateRef = useRef<FileViewerState>\(\{\n\s+displayMode: requestedInitialDisplayMode,\n\s+wrapLines: initialWrapLines,\n\s+scrollTop: initialScrollTop,\n\s+scrollLeft: initialScrollLeft,\n\s+draft: initialState\?\.draft \?\? null,\n\s+\}\);/,
+  );
+
+  // The identity effect rebuilds nextState and assigns it to viewerStateRef;
+  // it must carry the draft too, otherwise Strict Mode's double-invoked mount
+  // cleanup clobbers the draft before applyDiskContent can restore it.
+  assert.match(
+    source,
+    /const nextState: FileViewerState = \{\n\s+displayMode: requestedInitialDisplayMode,\n\s+wrapLines: initialWrapLines,\n\s+scrollTop: initialScrollTop,\n\s+scrollLeft: initialScrollLeft,\n\s+draft: initialState\?\.draft \?\? null,\n\s+\};/,
+  );
+});
+
+test("FileEditor renders only in the edit branch", () => {
+  assert.match(source, /effectiveDisplayMode === "edit" \? \(\n\s+<FileEditor/);
+  assert.equal(source.match(/<FileEditor/g)?.length, 1);
+  assert.match(source, /onSave=\{\(\) => void saveFile\(\)\}/);
 });

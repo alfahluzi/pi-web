@@ -18,6 +18,8 @@ export interface Tab {
   page?: number;
   viewerState?: FileViewerState;
   viewerRevision?: number;
+  /** Unsaved draft exists in this file tab. */
+  dirty?: boolean;
   /** Named icon for a `plugin` tab. */
   icon?: string;
   /** Custom 24×24 path `d` for a `plugin` tab, validated server-side. */
@@ -116,6 +118,13 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
                 </svg>
               ) : getFileIcon(tab.label, 13)}
             </span>
+            {tab.dirty ? (
+              <span
+                className="tab-dirty-dot"
+                aria-hidden="true"
+                style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }}
+              />
+            ) : null}
             <span
               style={{
                 overflow: "hidden",

@@ -525,6 +525,7 @@ export function AppShell() {
 
   // Files unmount when inactive; workspace terminals stay mounted until closed.
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
+  const [dirtyFileTabs, setDirtyFileTabs] = useState<Set<string>>(new Set());
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const fileWorkspaceStatesRef = useRef(new Map<string, ParkedFileWorkspace>());
   // Bumped on every workspace switch. The active viewer reports its state as
@@ -541,7 +542,7 @@ export function AppShell() {
   // they are dropped when the project changes (they belong to its sessions).
   const [agentTabs, setAgentTabs] = useState<{ sessionId: string; label: string }[]>([]);
   const panelTabs: Tab[] = [
-    ...fileTabs,
+    ...fileTabs.map((tab) => ({ ...tab, dirty: dirtyFileTabs.has(tab.id) })),
     ...webPanelTabs.map((tab) => ({
       id: tab.id,
       label: tab.title,
@@ -620,6 +621,15 @@ export function AppShell() {
       setRightPanelOpen(next.open);
     }
   }, [activeFileTabId, fileTabs, rightPanelOpen]);
+
+  const handleFileDirtyChange = useCallback((tabId: string, dirty: boolean) => {
+    setDirtyFileTabs((prev) => {
+      const next = new Set(prev);
+      if (dirty) next.add(tabId);
+      else next.delete(tabId);
+      return next;
+    });
+  }, []);
 
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
@@ -1294,6 +1304,12 @@ export function AppShell() {
       if (fileTabs.length === 0 && terminalTabs.length === 0 && remainingAgents.length === 0) setRightPanelOpen(false);
       return;
     }
+    if (dirtyFileTabs.has(tabId) && !window.confirm(translate("i18n.discardUnsavedChanges"))) return;
+    setDirtyFileTabs((prev) => {
+      const next = new Set(prev);
+      next.delete(tabId);
+      return next;
+    });
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
       if (next.length === 0 && terminalTabs.length === 0 && webPanelTabs.length === 0 && agentTabs.length === 0) setRightPanelOpen(false);
@@ -1304,7 +1320,7 @@ export function AppShell() {
       const remaining = fileTabs.filter((t) => t.id !== tabId);
       return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(agentTabs) ?? null;
     });
-  }, [fileTabs, terminalTabs, webPanelTabs, agentTabs]);
+  }, [fileTabs, terminalTabs, webPanelTabs, agentTabs, dirtyFileTabs, translate]);
 
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;
@@ -2856,6 +2872,7 @@ export function AppShell() {
                 activeFileTab.viewerRevision ?? 0,
                 viewerState,
               )}
+              onDirtyChange={(dirty) => handleFileDirtyChange(activeFileTab.id, dirty)}
               onMentionLines={rightPanelOpen ? handleFileLineMention : undefined}
               onAtMention={handleAtMention}
               onOpenFile={(filePath, page) => handleOpenFile(

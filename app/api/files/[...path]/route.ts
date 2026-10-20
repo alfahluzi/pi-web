@@ -22,6 +22,8 @@ import { resolveDirentIsDirectory } from "@/lib/file-dirent";
 import { getFileTreeHiddenReasons } from "@/lib/file-tree-visibility";
 import { isFilePathReferencedBySession } from "@/lib/session-file-references";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { fileRevision, validateFileEditInput } from "@/lib/file-edit";
+import { writeFileAtomicSync } from "@/lib/atomic-file";
 import {
   inspectUploadTargets,
   parseUploadConflictStrategy,
@@ -260,6 +262,64 @@ export async function POST(
       { uploaded, skipped, errors },
       { status: errors.length > 0 ? 207 : 200 },
     );
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+  }
+}
+
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  if (!isApiRequestAllowed(request)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+
+  if (!hasJsonContentType(request)) {
+    return NextResponse.json({ error: "Expected application/json" }, { status: 415 });
+  }
+
+  try {
+    const { path: segments } = await params;
+    const filePath = filePathFromApiSegments(segments);
+    const allowedRoots = await getAllowedFileRoots();
+    if (
+      !isFilePathAllowed(filePath, allowedRoots)
+      || !isExistingFilePathAllowed(filePath, allowedRoots)
+    ) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+
+    let lstat: fs.Stats;
+    try {
+      lstat = fs.lstatSync(filePath);
+    } catch {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    if (lstat.isSymbolicLink()) {
+      return NextResponse.json({ error: "Cannot write through a symbolic link" }, { status: 400 });
+    }
+    if (!lstat.isFile()) {
+      return NextResponse.json({ error: "Not a file" }, { status: 400 });
+    }
+
+    const stat = fs.statSync(filePath);
+    const revision = fileRevision(stat);
+
+    const body = await request.json().catch(() => null);
+    const validated = validateFileEditInput(body, { size: stat.size, revision });
+    if (!validated.ok) {
+      return NextResponse.json({ error: validated.error }, { status: validated.status });
+    }
+
+    writeFileAtomicSync(filePath, validated.content, stat.mode & 0o777);
+
+    const next = fs.statSync(filePath);
+    return NextResponse.json({
+      revision: fileRevision(next),
+      size: next.size,
+      mtime: next.mtime.toISOString(),
+    });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
@@ -529,7 +589,7 @@ export async function GET(
       }
       const chunk = readTextPreviewChunk(filePath, stat.size, offset);
       const language = getLanguage(filePath);
-      return NextResponse.json({ ...chunk, language, size: stat.size });
+      return NextResponse.json({ ...chunk, language, size: stat.size, revision: fileRevision(stat) });
     }
 
     if (type === "download") {

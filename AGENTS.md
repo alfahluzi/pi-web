@@ -62,7 +62,7 @@ app/api/
   default-cwd/route.ts             POST create ~/pi-cwd/YYYYMMDD (local date)
   home/route.ts                    GET user home directory
   open-in-explorer/route.ts        GET availability | POST open a cwd in the OS file manager (loopback only)
-  files/[...path]/route.ts         GET ?type=list|read|download|meta|preview|watch | POST ?type=upload|upload-check|allow-link
+  files/[...path]/route.ts         GET ?type=list|read|download|meta|preview|watch | POST ?type=upload|upload-check|allow-link | PUT in-place save (revision-guarded)
   file-index/route.ts              GET file list for @-mentions
   git/status/route.ts              GET changed files for a cwd
   git/diff/route.ts                GET diff of one changed file
@@ -96,6 +96,7 @@ app/api/
   push/config/route.ts             GET VAPID public key
   push/subscribe/route.ts          POST register a push subscription
   app-update/route.ts              GET current vs latest published pi-web version
+  sessions/pinned/route.ts         GET list | POST { sessionId, pinned } toggle a session pin
   web-panels/route.ts              GET [cwd] right-panel web panels declared by installed Pi packages
   web-panels/[id]/[[...path]]/route.ts  GET a panel document + its relative assets from the owning package
 
@@ -181,6 +182,12 @@ lib/
   mcp-import.ts             pure paste importer (+ mcp-import-core/json/cli/links.ts)
   mcp-server-display.ts     client-safe display helpers for McpServerInfo (hidden-character escapes, labels)
   mcp-tool-display.ts       server/tool label of an mcp__ call from its result details, never the name
+  file-edit.ts              revision token and PUT body validation (size, NUL, stale-base checks)
+  file-language.ts          file name / extension to editor language id
+  code-languages.ts         lazy CodeMirror language loader for the file editor
+  session-pin-order.ts      pure pin list normalization and newest-first toggle (browser-safe)
+  session-pins.ts           read/write ~/.pi/agent/pi-web-pinned-sessions.json
+  session-list-rows.ts      pure pinned-section row model and variable-height windowing
   web-panel-manifest.ts     pure `package.json#piWeb` parsing, icon names, package-root containment
   web-panel-bridge.ts       workspace-relative path resolution for panel `open-file`
   web-panels.ts             installed-package panel registry behind /api/web-panels
@@ -246,6 +253,11 @@ hooks/
   useTheme.ts              theme state
   useTerminalTheme.ts      the terminal's own dark/light choice (localStorage), apart from the app theme
 ```
+  FileEditor.tsx            CodeMirror 6 editor used by the file viewer's edit mode
+  WebPanelFrame.tsx         sandboxed iframe + postMessage bridge for a package panel
+  WebPanelIcon.tsx          named / custom SVG icons for panel buttons
+  web-panel-tab-state.ts    plugin tab identity + manifest reconciliation
+  QuestionnairePanel.tsx    native renderer for an ask-user-question dialog with previews
 
 ---
 
@@ -271,6 +283,21 @@ Design decisions and traps live in `docs/agents/`, one note per area. Read every
 
 - `/` renders entirely on the client, so one script chunk the browser cannot parse is a blank page. Next 16 targets Safari 16.4+; the `browserslist` in `package.json` lowers Safari and iOS to 16.2 so SWC turns class `static {}` blocks into private static fields. That covers Next's client runtime; other node_modules keep their syntax unless listed in `transpilePackages` (mermaid and `@mermaid-js/parser` are, for their lazy diagram chunks). Keep the other browserslist entries at Next's defaults.
 - Never write a RegExp lookbehind (`(?<=`, `(?<!`) in client code: SWC cannot downlevel it and Safari parses it only from 16.4. `lib/markdown.ts` emulates its leading lookbehinds with `replaceNotPrecededBy()`. A lookbehind built at runtime (`new RegExp("(?<=…)")` in `try`) fails only when run; that is how `lib/gfm-autolink-email-loader.cjs` fixes `mdast-util-gfm-autolink-literal`'s email regex. The loader is registered for webpack and Turbopack in `next.config.ts` and fails the build if that regex changes upstream.
+
+### Pinned sessions
+- A pin is a pi-web preference, not pi data. `lib/session-pins.ts` keeps an ordered id list in `~/.pi/agent/pi-web-pinned-sessions.json` (private atomic write) instead of appending a custom entry to the session `.jsonl`, which the TUI also writes and rewrites. A missing, malformed, or unreadable file means "nothing pinned": the sidebar must still paint. `lib/session-pin-order.ts` holds the pure normalization and newest-first toggle so the browser never imports the `node:fs` module.
+- `GET /api/sessions` ships `pinnedSessionIds` alongside the list, so a reload or a second tab converges on the sidecar without a second request; `POST /api/sessions/pinned { sessionId, pinned }` is the only writer. The sidebar toggles optimistically, then adopts the response list and falls back to a full `loadSessions()` when the write fails.
+- The pinned section is drawn from `lib/session-list-rows.ts`, a row model of `pinnedHeader` + families, and it is scoped to the active workspace: `families` is already filtered to the selected project, so a pin from another project adds neither a row nor a header. Only family roots are pin targets — subagent rows have no row of their own, so a pinned child id would strand the family.
+- Because the section header is shorter than a session row, the window is computed from row offsets (`getVirtualRowIndices`) rather than `index * height`. Keep `sessionListRowHeight` as the single source of heights — an absolute row positioned by index would overlap the pinned block. `getSessionListIndices` (fixed height) stays for the sidebar test suite.
+- Deleting a session leaves its id in the sidecar; it simply matches no family, so pins never resurrect a deleted session.
+
+### File editing and save-based sync
+- `PUT /api/files/[...path]` saves a text file in place. The guard order matters and must stay: `isApiRequestAllowed` origin check -> JSON content-type (`hasJsonContentType`) -> allowed-root plus realpath containment (`isFilePathAllowed` and `isExistingFilePathAllowed`) -> `lstat` with symlink and non-file refusal -> revision read -> `validateFileEditInput` -> `writeFileAtomicSync`. Writes are **never** authorized through `isFilePathReferencedBySession`; that escape hatch exists so a session can read a file outside the allowed roots, not write it.
+- The text `read` response carries `revision` (`fileRevision(stat)` = `Math.trunc(mtimeMs):size:ino`). The client sends it back as `baseRevision`; a mismatch returns `409 { error: "File changed on disk" }`. `validateFileEditInput` also rejects an over-limit body with `413` and NUL-containing content with `415`, and it checks the current on-disk size first so a file that was never fully loaded reports "too large to edit" instead of a conflict.
+- Saves go through `writeFileAtomicSync(path, content, stat.mode & 0o777)`: a same-directory `.{name}-{uuid}.tmp` write plus `renameSync`, so the temp file keeps the target's permission bits and the directory `fs.watch` sees the rename. That is what fans the new revision out to every open tab.
+- The viewer's SSE `change` handler always re-runs the git diff, but it refreshes the buffer only when `dirtyRef.current` is false; a dirty buffer gets the "external change" banner instead. Without that guard a save in one tab (or an agent write) would clobber unsaved edits in another.
+- Only the active tab mounts `FileViewer`, so a draft survives a tab switch because the buffer is stored in `FileViewerState.draft` on change and restored on remount; it is cleared on save and reload. Tab-level dirty state and the close confirmation read from that same signal.
+- CRLF is preserved: the loader records whether the disk text used `\r\n`, the buffer works in LF, and `saveFile()` converts back before sending, so an edit does not rewrite every line ending.
 
 ### Package-provided right panels (`package.json#piWeb`)
 - Pi extensions run in Node and cannot render into the browser (`ctx.ui.custom()` returns `undefined` in RPC mode), so a package's browser UI is a **separate declaration**, not part of the extension API: `package.json#piWeb.panels` (see `docs/web-panels.md`, example in `examples/web-panel-plugin`).

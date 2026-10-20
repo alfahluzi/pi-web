@@ -37,6 +37,32 @@ All changes are in `lib/rpc-manager.ts`, `lib/pi-types.ts`, `README.md`, and
 3. **Percentage overlay widths** (`"100%"`) now map to a real column count
    (~118 columns) so wide dialogs keep their intended geometry.
 
+## In-place file editing with save-based sync
+
+The file viewer can now edit text files in place instead of only previewing
+them, and a save fans out to every open view.
+
+- New files: `lib/file-edit.ts` (revision token and save-body validation),
+  `lib/file-language.ts` (file name/extension to language id),
+  `lib/code-languages.ts` (lazy CodeMirror language loader), and
+  `components/FileEditor.tsx` (the CodeMirror 6 editor). New tests accompany
+  each.
+- New endpoint: `PUT /api/files/[...path]` writes a file atomically while
+  preserving its permission bits. It takes `{ content, baseRevision }`,
+  answers `{ revision, size, mtime }`, and returns `409` when the file changed
+  on disk underneath the editor. Text `read` responses now also return the
+  `revision` token that a save passes back as `baseRevision`.
+- Modified: `app/api/files/[...path]/route.ts` (write handler and revision in
+  the read response), `lib/atomic-file.ts` (`writeFileAtomicSync`),
+  `lib/file-viewer-state.ts` and `components/FileViewer.tsx` (`edit` display
+  mode, save/reload/overwrite banner, draft in `FileViewerState.draft`, dirty
+  guard on the watch refresh), `components/AppShell.tsx`,
+  `components/TabBar.tsx`, and `components/file-tab-state.ts` (dirty tab dot
+  and close prompt), plus the three `lib/i18n/messages/*` locale files.
+- The SSE `change` handler refreshes a clean buffer but leaves a dirty one
+  alone, showing a "file changed on disk" banner so a concurrent save cannot
+  clobber unsaved edits.
+
 ## Enable the UI
 
 `~/pi-web.env` sets:
@@ -143,6 +169,32 @@ A panel is an iframe, not a React component, because Pi extensions run in Node
 and cannot render into the browser. The panel is trusted at the same level as the
 package's extension code; assets are live-read so a plugin can be edited while
 `npm run dev` runs.
+
+## Pinned sessions in the sidebar
+
+The session list can pin a conversation to the top of the sidebar in its own
+"Pinned" section, above the normal most-recent-activity order. Pinned rows stay
+scoped to the active workspace, so a pin from another project neither shows a row
+nor an empty header. Pin and unpin from the pushpin button that appears on row
+hover; a pinned row also carries a small pushpin next to its title.
+
+- New files: `lib/session-pin-order.ts` (pure normalization and newest-first
+toggle, browser-safe), `lib/session-pins.ts` (reads and writes
+`~/.pi/agent/pi-web-pinned-sessions.json` with a private atomic write),
+`lib/session-list-rows.ts` (pinned-section row model plus the variable-height
+window), and `app/api/sessions/pinned/route.ts` (list and toggle). Tests
+accompany each.
+- Modified: `app/api/sessions/route.ts` now returns `pinnedSessionIds` with the
+list, `components/SessionSidebar.tsx` renders the section and toggles the pin
+optimistically, and the three i18n message files gain `sidebar.pinned`,
+`sidebar.pin`, and `sidebar.unpin`.
+- Why a sidecar file rather than a custom transcript entry: the session `.jsonl`
+is written and rewritten by the Pi TUI, so a pin has to live outside it. The id
+list is pi-web's own preference; a missing or malformed file simply reads as
+nothing pinned.
+- The pinned section header is shorter than a session row, so the virtualized
+list is offset from a prefix-sum table instead of `index * rowHeight`
+(`getVirtualRowIndices`). See the "Pinned sessions" section in `AGENTS.md`.
 
 ## Deploy
 

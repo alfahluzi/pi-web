@@ -121,6 +121,7 @@ test("every explicit diff activation resets the mode and increments the revision
     wrapLines: true,
     scrollTop: 0,
     scrollLeft: 0,
+    draft: null,
   });
 
   const returnedToSource = saveFileViewerState(first, tabA.id, 1, tabA.viewerState);
@@ -158,4 +159,16 @@ test("opening a PDF without a page fragment clears a previous jump", () => {
   const [next] = openFileTab([{ ...tabA, page: 12 }], openA);
   assert.equal(next.page, undefined);
   assert.equal(next.viewerRevision, 1);
+});
+
+test("forcing diff on a tab with a draft keeps the draft and resets the view", () => {
+  const draftTab = {
+    ...tabA,
+    viewerState: { ...tabA.viewerState, draft: "unsaved text" },
+  };
+  const [next] = openFileTab([draftTab], { ...openA, modeHint: "diff" });
+  assert.equal(next.viewerState.draft, "unsaved text");
+  assert.equal(next.viewerState.displayMode, "diff");
+  assert.equal(next.viewerState.scrollTop, 0);
+  assert.equal(next.viewerState.scrollLeft, 0);
 });
