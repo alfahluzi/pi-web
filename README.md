@@ -11,6 +11,7 @@ Local browser UI for the [pi coding agent](https://github.com/earendil-works/pi)
 - **Session workspace**: browse, resume, rename, export, and delete conversations grouped by project, with running state, context usage, cost, and compaction details.
 - **Two ways to branch**: **New session** creates an independent session file from an earlier message; **Edit from here** creates a branch inside the current session.
 - **Project file tools**: browse and upload files, inspect Git diffs, and preview source, Markdown, images, audio, PDFs, and DOCX files with automatic refresh.
+- **In-place file editing**: open a text file in the viewer, switch to **Edit**, and save with `Ctrl/Cmd+S`. Saves are atomic, keep the file's permission bits, and sync to every other open view through the existing live-change watcher.
 - **Git worktrees**: switch checkouts from the sidebar while keeping sessions from the same repository grouped together.
 - **Web-based configuration**: manage provider login and API keys, models, model tests, plugin packages, and skills without leaving Pi Web.
 - **English, Simplified Chinese, and Traditional Chinese UI**: Pi Web follows the browser language initially and provides a language switcher in the top bar.
@@ -98,6 +99,16 @@ npx @agegr/pi-web@latest
 - **Shared configuration**: the Models panel uses pi's model, settings, and credential storage, so changes are visible to both interfaces.
 - **File access boundary**: the file browser is limited to working directories selected in Pi Web and project or session roots it already knows about; it is not a general filesystem browser.
 - **Git worktrees**: see [Worktrees in Pi Web](./docs/worktrees.md) for switcher visibility, worktree creation, and removal behavior.
+
+### File API
+
+The viewer reads files through `GET /api/files/[...path]` (`type=list|read|watch|meta|preview|download`). Text reads also return a `revision` token, and the write endpoint uses it to detect conflicts:
+
+| Request | Body | Response |
+| --- | --- | --- |
+| `PUT /api/files/[...path]` | `{ content, baseRevision }` | `{ revision, size, mtime }` |
+
+A stale `baseRevision` is rejected with `409`, so the viewer can offer reload or overwrite instead of silently discarding a concurrent edit. Writes are atomic and preserve the file's permission bits.
 
 ### Downstream Session Context Menu
 

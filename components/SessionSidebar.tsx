@@ -7,6 +7,15 @@ import { loadExplorerOpen, saveExplorerOpen } from "@/lib/file-explorer-state";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib/project-groups";
+import {
+  PINNED_SECTION_HEADER_HEIGHT,
+  SESSION_ROW_HEIGHT,
+  buildSessionListRows,
+  getVirtualRowIndices,
+  sessionListOffsets,
+  sessionListRowHeight,
+} from "@/lib/session-list-rows";
+import { togglePinnedId } from "@/lib/session-pin-order";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { useI18n } from "@/hooks/useI18n";
@@ -18,7 +27,30 @@ import { SessionSearch } from "./SessionSearch";
 
 // Fixed row height for the session list. SessionItem renders at exactly this
 // height, so the list can be windowed (only the visible slice is mounted).
-const SESSION_LIST_ITEM_HEIGHT = 54;
+// Pinned rows use the same height; only the section header differs, which is
+// why the mounted window is computed from row offsets (`lib/session-list-rows`).
+const SESSION_LIST_ITEM_HEIGHT = SESSION_ROW_HEIGHT;
+const SESSION_LIST_SCROLL_STEP = 24;
+
+/** Pushpin glyph shared by the pinned-section label and the row toggle. */
+function PinIcon({ size = 11, filled = false }: { size?: number; filled?: boolean }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill={filled ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ flexShrink: 0 }}
+    >
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+    </svg>
+  );
+}
 
 export function getSessionListIndices(count: number, scrollTop: number, viewportHeight: number, focusedIndex = -1): number[] {
   const overscan = 8;
@@ -424,6 +456,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [changesCollapsed, setChangesCollapsed] = useState(true);
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  // Pin order, newest first. Served with the session list so every reload and
+  // every tab converges on the sidecar file without an extra request.
+  const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>([]);
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   const currentSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
@@ -484,7 +519,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (listScrollRafRef.current != null) return;
     listScrollRafRef.current = requestAnimationFrame(() => {
       listScrollRafRef.current = null;
-      const nextTop = Math.floor(listScrollTopRef.current / SESSION_LIST_ITEM_HEIGHT) * SESSION_LIST_ITEM_HEIGHT;
+      const nextTop = Math.floor(listScrollTopRef.current / SESSION_LIST_SCROLL_STEP) * SESSION_LIST_SCROLL_STEP;
       if (renderedListScrollTopRef.current === nextTop) return;
       renderedListScrollTopRef.current = nextTop;
       setListScrollTop(nextTop);
@@ -499,7 +534,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     ro.observe(el);
     setListViewportH(el.clientHeight);
     listScrollTopRef.current = el.scrollTop;
-    renderedListScrollTopRef.current = Math.floor(el.scrollTop / SESSION_LIST_ITEM_HEIGHT) * SESSION_LIST_ITEM_HEIGHT;
+    renderedListScrollTopRef.current = Math.floor(el.scrollTop / SESSION_LIST_SCROLL_STEP) * SESSION_LIST_SCROLL_STEP;
     setListScrollTop(renderedListScrollTopRef.current);
     return () => ro.disconnect();
   }, [sessionSearchActive]);
@@ -517,10 +552,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         sessionListVersion: number;
         runningSessionIds?: string[];
         completionNotificationSuppressedSessionIds?: string[];
+        pinnedSessionIds?: string[];
       };
       if (loadId !== sessionLoadIdRef.current) return;
       sessionListVersionRef.current = data.sessionListVersion;
       setAllSessions(data.sessions);
+      setPinnedSessionIds(data.pinnedSessionIds ?? []);
       // Treat the fetched running set as an initial fallback only. Once the
       // lightweight poll is live, a slow session-list fetch cannot overwrite it.
       if (!runningPollAuthoritativeRef.current) {
@@ -1015,6 +1052,25 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onSelectSession(s, false, entryId, blockIndex);
   }, [onSelectSession]);
 
+  // Pin changes reorder the list, so the row is moved optimistically and the
+  // server's list replaces it. A failed write resyncs instead of leaving a pin
+  // that only looks saved.
+  const toggleSessionPin = useCallback(async (sessionId: string, pinned: boolean) => {
+    setPinnedSessionIds((current) => togglePinnedId(current, sessionId, pinned));
+    try {
+      const res = await fetch("/api/sessions/pinned", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, pinned }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { pinnedSessionIds?: string[] };
+      if (Array.isArray(data.pinnedSessionIds)) setPinnedSessionIds(data.pinnedSessionIds);
+    } catch {
+      void loadSessions();
+    }
+  }, [loadSessions]);
+
   const handleNewSession = useCallback(() => {
     if (!selectedCwd) return;
     // Generate a temporary UUID client-side — no backend call needed.
@@ -1089,12 +1145,24 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   const sessionFamilies = useMemo(() => listSessionFamilies(filteredSessions), [filteredSessions]);
 
-  const virtualIndices = useMemo(() => getSessionListIndices(
-    sessionFamilies.length,
+  // Pinned sessions open the list as their own section, but only within the
+  // active workspace: the families here are already filtered to the selected
+  // project, so a pin from another project adds no header and no row.
+  const pinnedSessionSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
+  const listRows = useMemo(
+    () => buildSessionListRows(sessionFamilies, pinnedSessionIds),
+    [sessionFamilies, pinnedSessionIds],
+  );
+  const listRowHeights = useMemo(() => listRows.map(sessionListRowHeight), [listRows]);
+  const listOffsets = useMemo(() => sessionListOffsets(listRowHeights), [listRowHeights]);
+  const listHeight = listOffsets[listOffsets.length - 1] ?? 0;
+
+  const virtualIndices = useMemo(() => getVirtualRowIndices(
+    listRowHeights,
     listScrollTop,
     listViewportH,
-    sessionFamilies.findIndex((family) => family.root.id === focusedSessionId),
-  ), [focusedSessionId, listScrollTop, listViewportH, sessionFamilies]);
+    listRows.findIndex((row) => row.kind === "family" && row.family.root.id === focusedSessionId),
+  ), [focusedSessionId, listRowHeights, listRows, listScrollTop, listViewportH]);
 
   return (
     <div
@@ -1809,28 +1877,56 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           <div
             style={{
               position: "relative",
-              height: sessionFamilies.length * SESSION_LIST_ITEM_HEIGHT,
+              height: listHeight,
             }}
           >
             {virtualIndices.map((index) => {
-              const family = sessionFamilies[index];
+              const row = listRows[index];
+              if (!row) return null;
+              // Rows are absolutely positioned from the offset table, not from
+              // `index * height`: the pinned section header is shorter than a
+              // session row.
+              const top = listOffsets[index];
+              if (row.kind === "pinnedHeader") {
+                return (
+                  <div
+                    key={row.key}
+                    style={{
+                      position: "absolute", top, left: 0, right: 0,
+                      height: PINNED_SECTION_HEADER_HEIGHT,
+                      display: "flex", alignItems: "center", gap: 5,
+                      padding: "0 14px",
+                      color: "var(--text-dim)",
+                      fontSize: 10, fontWeight: 600,
+                      letterSpacing: "0.06em", textTransform: "uppercase",
+                    }}
+                  >
+                    <PinIcon size={10} filled />
+                    {t("sidebar.pinned")}
+                  </div>
+                );
+              }
+              const family = row.family;
               const familySessions = [family.root, ...family.subagents];
               const displaySession = family.latestModified === family.root.modified
                 ? family.root
                 : { ...family.root, modified: family.latestModified };
+              const isPinned = pinnedSessionSet.has(family.root.id);
               // Bubble blur after the input's save handler before unpinning the row.
               return (
                 <div
                   key={family.root.id}
                   onFocus={() => setFocusedSessionId(family.root.id)}
                   onBlur={() => setFocusedSessionId(null)}
-                  style={{ position: "absolute", top: index * SESSION_LIST_ITEM_HEIGHT, left: 0, right: 0 }}
+                  style={{ position: "absolute", top, left: 0, right: 0 }}
                 >
                   <SessionItem
                     session={displaySession}
                     isSelected={familySessions.some((session) => session.id === selectedSessionId)}
                     isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
                     isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
+                    isPinned={isPinned}
+                    onTogglePin={() => void toggleSessionPin(family.root.id, !isPinned)}
                     onClick={() => handleSelectSessionFromList(family.root)}
                     onRenamed={loadSessions}
                     onDeleted={(id) => {
@@ -2128,7 +2224,9 @@ function SessionItem({
   isSelected,
   isRunning,
   isUnread,
+  isPinned,
   onClick,
+  onTogglePin,
   onRenamed,
   onDeleted,
   depth = 0,
@@ -2140,7 +2238,9 @@ function SessionItem({
   isSelected: boolean;
   isRunning?: boolean;
   isUnread?: boolean;
+  isPinned?: boolean;
   onClick: () => void;
+  onTogglePin?: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
   depth?: number;
@@ -2228,6 +2328,11 @@ function SessionItem({
     e.stopPropagation();
     setConfirmDelete(false);
   }, []);
+
+  const handlePinClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onTogglePin?.();
+  }, [onTogglePin]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const handled = dispatchSessionRowContextMenu({
@@ -2359,6 +2464,7 @@ function SessionItem({
               }}
               title={title}
             >
+              {isPinned && <PinIcon size={11} filled />}
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {title}
               </span>
@@ -2414,6 +2520,32 @@ function SessionItem({
           {/* Action buttons — shown on hover */}
           {hovered && !session.transient && (
             <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+              {onTogglePin && (
+                <button
+                  onClick={handlePinClick}
+                  title={t(isPinned ? "sidebar.unpin" : "sidebar.pin")}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 32, height: 32, padding: 0,
+                    background: "var(--bg-hover)", border: "1px solid var(--border)",
+                    borderRadius: 7, color: isPinned ? "var(--accent)" : "var(--text-muted)",
+                    cursor: "pointer", flexShrink: 0,
+                    transition: "background 0.12s, color 0.12s, border-color 0.12s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "var(--bg-selected)";
+                    e.currentTarget.style.color = "var(--accent)";
+                    e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "var(--bg-hover)";
+                    e.currentTarget.style.color = isPinned ? "var(--accent)" : "var(--text-muted)";
+                    e.currentTarget.style.borderColor = "var(--border)";
+                  }}
+                >
+                  <PinIcon size={14} filled={isPinned} />
+                </button>
+              )}
               <button
                 onClick={startRename}
                 title={t("sidebar.rename")}

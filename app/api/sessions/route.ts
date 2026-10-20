@@ -13,6 +13,7 @@ import {
   getRunningRpcSessionIds,
 } from "@/lib/rpc-manager";
 import { startServerPerf } from "@/lib/perf";
+import { readPinnedSessionIds } from "@/lib/session-pins";
 
 export const dynamic = "force-dynamic";
 
@@ -36,25 +37,17 @@ export async function GET(req: Request) {
     ]);
     perf?.span("scan+projects");
     const sessions = mergeSessionLists(persistedSessions, runtimeSessions);
-    return perf?.attach(jsonResponse(
-      req,
-      {
-        sessions,
-        sessionListVersion,
-        runningSessionIds: getRunningRpcSessionIds(),
-        completionNotificationSuppressedSessionIds: getCompletionNotificationSuppressedRpcSessionIds(),
-      },
-      { headers: { "Cache-Control": "no-store" } },
-    )) ?? jsonResponse(
-      req,
-      {
-        sessions,
-        sessionListVersion,
-        runningSessionIds: getRunningRpcSessionIds(),
-        completionNotificationSuppressedSessionIds: getCompletionNotificationSuppressedRpcSessionIds(),
-      },
-      { headers: { "Cache-Control": "no-store" } },
-    );
+    // Pins ship with the list so every reload (and every tab that reloads)
+    // agrees with the sidecar without a second request.
+    const payload = {
+      sessions,
+      sessionListVersion,
+      runningSessionIds: getRunningRpcSessionIds(),
+      completionNotificationSuppressedSessionIds: getCompletionNotificationSuppressedRpcSessionIds(),
+      pinnedSessionIds: readPinnedSessionIds(),
+    };
+    const options = { headers: { "Cache-Control": "no-store" } };
+    return perf?.attach(jsonResponse(req, payload, options)) ?? jsonResponse(req, payload, options);
   } catch (error) {
     return NextResponse.json(
       { error: String(error) },

@@ -61,7 +61,7 @@ app/api/
   auth/providers/route.ts         GET OAuth and API-key provider lists
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/pi-cwd-YYYYMMDD
-  files/[...path]/route.ts        GET file contents for viewer
+  files/[...path]/route.ts        GET file contents | PUT in-place save (revision-guarded)
   home/route.ts                   GET user home directory
   models/route.ts                 GET { models, modelList, defaultModel }
   models/enabled/route.ts         GET/PUT enabledModels switches for the Models panel
@@ -80,6 +80,7 @@ app/api/
   plugins/check/route.ts          POST check plugin package updates
   project-trust/route.ts          GET/POST project trust for package installs
   sessions/search/route.ts        GET session search
+  sessions/pinned/route.ts        GET list | POST { sessionId, pinned } toggle a pin
   sessions/[id]/state/route.ts    GET live wrapper state when the session is running
   sessions/[id]/auto-name/route.ts POST generate a session title
   terminal/route.ts               POST create a terminal session
@@ -100,9 +101,12 @@ lib/
   agent-client.ts      typed fetch helper for /api/agent commands
   draft-store.ts       local draft persistence helpers
   file-access.ts       allowed file roots for /api/files and worktrees
+  file-edit.ts         revision token and PUT body validation (size, NUL, stale-base checks)
+  file-language.ts     file name / extension -> editor language id
   file-paths.ts        client/server path encoding helpers
   enabled-models.ts    pure minimal-edit engine for the `enabledModels` pattern list
   enabled-models-runtime.ts  SDK adapter: per-pattern resolution, provider kinds, settings IO
+  code-languages.ts    lazy CodeMirror language loader for the file editor
   markdown.ts          shared markdown helpers
   node-cli.ts          locate bundled npm-cli.js / npx-cli.js so npm/npx spawn without a shell (Windows npm.cmd)
   npx.ts               npx runner used by skill install
@@ -110,6 +114,9 @@ lib/
   pi-types.ts          local structural types for pi SDK objects
   rpc-manager.ts      AgentSessionWrapper + registry + startRpcSession
   session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
+  session-pin-order.ts  pure pin list normalization + newest-first toggle (browser-safe)
+  session-pins.ts     read/write ~/.pi/agent/pi-web-pinned-sessions.json
+  session-list-rows.ts  pure pinned-section row model + variable-height windowing
   subagent-settings.ts  read/write ~/.pi/agent/agents/settings.json
   tool-presets.ts     PRESET_NONE/READ_ONLY/DEFAULT/FULL + getPresetFromTools()
   tool-preset-preference.ts  browser-persisted default for fresh sessions
@@ -134,6 +141,7 @@ components/
   AgentsConfig.tsx    built-in subagent toggle + agent profile editor
   PluginsConfig.tsx   modal for installed package plugins
   SkillsConfig.tsx    modal for loaded/search/installable skills
+  FileEditor.tsx      CodeMirror 6 editor used by the viewer's Edit mode
   FileExplorer.tsx    file tree inside sidebar
   FileIcons.tsx       file icon helpers
   FileViewer.tsx      file content in a tab
@@ -218,6 +226,13 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - Prompt runs use a monotonic run id; late SSE or slow reconciliation responses from an old run must be ignored so they cannot resurrect stale streaming bubbles.
 - Every SSE (re)connection in `useAgentSession` is gated on `sessionHookMountedRef`. React Strict Mode (on by default in `next dev`) re-runs effects in declaration order after a simulated unmount: the mount-only effect's cleanup sets that ref to `false`, and it is only restored when that effect re-runs, *after* the warm-session effect. The warm-session effect therefore re-asserts the ref before `maintainEventsConnected()`. Without it a dev-server tab never opened the event stream on mount or when switching back to a running session, so streamed output and new messages stayed invisible until the 15-second reconcile poll or a page refresh (`next start` was unaffected).
 
+### Pinned sessions
+- A pin is a pi-web preference, not pi data. `lib/session-pins.ts` keeps an ordered id list in `~/.pi/agent/pi-web-pinned-sessions.json` (private atomic write) instead of appending a custom entry to the session `.jsonl`, which the TUI also writes and rewrites. A missing, malformed, or unreadable file means "nothing pinned": the sidebar must still paint. `lib/session-pin-order.ts` holds the pure normalization and newest-first toggle so the browser never imports the `node:fs` module.
+- `GET /api/sessions` ships `pinnedSessionIds` alongside the list, so a reload or a second tab converges on the sidecar without a second request; `POST /api/sessions/pinned { sessionId, pinned }` is the only writer. The sidebar toggles optimistically, then adopts the response list and falls back to a full `loadSessions()` when the write fails.
+- The pinned section is drawn from `lib/session-list-rows.ts`, a row model of `pinnedHeader` + families, and it is scoped to the active workspace: `families` is already filtered to the selected project, so a pin from another project adds neither a row nor a header. Only family roots are pin targets — subagent rows have no row of their own, so a pinned child id would strand the family.
+- Because the section header is shorter than a session row, the window is computed from row offsets (`getVirtualRowIndices`) rather than `index * height`. Keep `sessionListRowHeight` as the single source of heights — an absolute row positioned by index would overlap the pinned block. `getSessionListIndices` (fixed height) stays for the sidebar test suite.
+- Deleting a session leaves its id in the sidecar; it simply matches no family, so pins never resurrect a deleted session.
+
 ### Worktrees and project grouping
 - `lib/worktree.ts` resolves linked worktree top-levels back to the main repo `projectRoot`; `listAllSessions()` attaches that to each `SessionInfo` so all worktrees for one repo are grouped together in the sidebar.
 - Worktree operations are served by `/api/worktrees` and guarded by the same allowed-root rules as `/api/files`.
@@ -231,6 +246,14 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - `/api/cwd/validate`, `/api/default-cwd`, and `/api/worktrees` call `allowFileRoot()` when they make a new location browsable.
 - Allowed roots are stored slash-normalized, but that is a Set-key convention, not a correctness requirement: `isPathWithinRoots()` (`lib/path-security.ts`, the single implementation behind `isFilePathAllowed()`) re-resolves and case-folds both sides, so either path form authorizes correctly. Keep that one implementation — it is the security boundary.
 - A UNC cwd (`\\host\share\dir`) must survive the `/api/files/[...path]` round-trip. `encodeFilePathForApi()` folds the `//` root into the first segment (`%2F%2Fhost`) because a literal `//` URL prefix is 308-normalized away before routing; `filePathFromApiSegments()` decodes it back. Never split UNC paths into segments and rejoin them — that silently turns `\\host\share` into the relative-looking `host/share` and every allow-check fails with 403.
+
+### File editing and save-based sync
+- `PUT /api/files/[...path]` saves a text file in place. The guard order matters and must stay: `isApiRequestAllowed` origin check -> JSON content-type (`hasJsonContentType`) -> allowed-root plus realpath containment (`isFilePathAllowed` and `isExistingFilePathAllowed`) -> `lstat` with symlink and non-file refusal -> revision read -> `validateFileEditInput` -> `writeFileAtomicSync`. Writes are **never** authorized through `isFilePathReferencedBySession`; that escape hatch exists so a session can read a file outside the allowed roots, not write it.
+- The text `read` response carries `revision` (`fileRevision(stat)` = `Math.trunc(mtimeMs):size:ino`). The client sends it back as `baseRevision`; a mismatch returns `409 { error: "File changed on disk" }`. `validateFileEditInput` also rejects an over-limit body with `413` and NUL-containing content with `415`, and it checks the current on-disk size first so a file that was never fully loaded reports "too large to edit" instead of a conflict.
+- Saves go through `writeFileAtomicSync(path, content, stat.mode & 0o777)`: a same-directory `.{name}-{uuid}.tmp` write plus `renameSync`, so the temp file keeps the target's permission bits and the directory `fs.watch` sees the rename. That is what fans the new revision out to every open tab.
+- The viewer's SSE `change` handler always re-runs the git diff, but it refreshes the buffer only when `dirtyRef.current` is false; a dirty buffer gets the "external change" banner instead. Without that guard a save in one tab (or an agent write) would clobber unsaved edits in another.
+- Only the active tab mounts `FileViewer`, so a draft survives a tab switch because the buffer is stored in `FileViewerState.draft` on change and restored on remount; it is cleared on save and reload. Tab-level dirty state and the close confirmation read from that same signal.
+- CRLF is preserved: the loader records whether the disk text used `\r\n`, the buffer works in LF, and `saveFile()` converts back before sending, so an edit does not rewrite every line ending.
 
 ### Plugins and skills
 - `/api/plugins` uses pi's `SettingsManager` + `DefaultPackageManager` for global/project package install, remove, update, enable, and disable. Disabling writes empty `extensions/skills/prompts/themes` arrays for that package entry.
