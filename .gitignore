@@ -29,6 +29,7 @@
 
 # local screenshots / scratch artifacts
 /location-filter-*.png
+/.playwright-mcp/
 
 # debug
 npm-debug.log*

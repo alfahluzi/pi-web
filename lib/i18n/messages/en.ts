@@ -530,6 +530,7 @@ export const enLocale: LocalePlugin = {
     "chat.extensionMaximize": "Maximize",
     "chat.extensionRestoreSize": "Restore size",
     "chat.extensionMoreWaiting": "+{count} more",
+    "chat.extensionSecretNote": "Handed straight to sudo by this Pi Web server. It is never added to this conversation.",
     "chat.cancel": "Cancel",
     "chat.confirm": "Confirm",
     "chat.submit": "Submit",

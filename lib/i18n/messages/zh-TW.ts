@@ -530,6 +530,7 @@ export const zhTWLocale: LocalePlugin = {
     "chat.extensionMaximize": "放大",
     "chat.extensionRestoreSize": "還原尺寸",
     "chat.extensionMoreWaiting": "還有 {count} 個",
+    "chat.extensionSecretNote": "由本機 Pi Web 伺服器直接交給 sudo，不會寫入本對話。",
     "chat.cancel": "取消",
     "chat.confirm": "確認",
     "chat.submit": "送出",

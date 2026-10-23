@@ -163,6 +163,14 @@ export type ExtensionUiRequest =
       method: "input";
       title: string;
       placeholder?: string;
+      /**
+       * The answer is a secret (a sudo password): render a masked field and keep
+       * it out of every other surface. The value still travels the normal
+       * response path, so it never has to be a new wire method.
+       */
+      secret?: boolean;
+      /** Command the secret will be used for, so the operator knows what they approve. */
+      command?: string;
       timeout?: number;
       expiresAt?: number;
     }
