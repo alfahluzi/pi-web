@@ -7,9 +7,29 @@ import {
   type LoadExtensionsResult,
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
+import {
+  commandNeedsSudo,
+  createSudoAskpass,
+  SUDO_AUTH_FAILURE_PATTERN,
+  sudoShellPrefix,
+} from "./sudo-prompt";
 
 const HOST_EXTENSION_NAME = "pi-web-project-command-environment";
 const HOST_EXTENSION_PATH = `<inline:${HOST_EXTENSION_NAME}>`;
+
+/**
+ * Operator-supplied sudo password plumbing, wired to the session wrapper.
+ *
+ * Pi Web owns both halves: the prompt is a browser dialog, and the value goes
+ * straight into an askpass helper. It is never part of the tool call, so the
+ * model cannot read it out of its own transcript.
+ */
+export type SudoPasswordSource = {
+  /** Ask the operator; `undefined` means "run the command without a password". */
+  requestPassword(command: string, signal?: AbortSignal): Promise<string | undefined>;
+  /** The command reported an authentication failure, so the cached value is wrong. */
+  forgetPassword(): void;
+};
 
 type ProjectShellSettings = {
   getShellCommandPrefix(): string | undefined;
@@ -87,9 +107,46 @@ export function createProjectCommandBashOperations(
   };
 }
 
+/** Keep the configured prefix first; the sudo function has to win over it. */
+export function composeCommandPrefix(
+  configured: string | undefined,
+  extra: string | undefined,
+): string | undefined {
+  const parts = [configured, extra].filter((part): part is string => Boolean(part?.trim()));
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+/**
+ * Watch the tail of a command's output so a rejected password is not reused.
+ *
+ * Only the suffix is kept: sudo's message is the last thing it writes before
+ * giving up, and buffering a build log to search it would be wasteful.
+ */
+export function withSudoFailureDetection(
+  operations: BashOperations,
+  forgetPassword: () => void,
+  pattern: RegExp = SUDO_AUTH_FAILURE_PATTERN,
+): BashOperations {
+  return {
+    async exec(command, cwd, executionOptions) {
+      let tail = "";
+      const result = await operations.exec(command, cwd, {
+        ...executionOptions,
+        onData: (data) => {
+          tail = `${tail}${data.toString("utf8")}`.slice(-4096);
+          executionOptions.onData(data);
+        },
+      });
+      if (pattern.test(tail)) forgetPassword();
+      return result;
+    },
+  };
+}
+
 export function createProjectCommandBashExtension(options: {
   cwd: string;
   settings: ProjectShellSettings;
+  sudoPasswords?: SudoPasswordSource;
 }): InlineExtension {
   return {
     name: HOST_EXTENSION_NAME,
@@ -98,14 +155,39 @@ export function createProjectCommandBashExtension(options: {
       const displayDefinition = createBashToolDefinition(options.cwd);
       pi.registerTool({
         ...displayDefinition,
-        execute(toolCallId, params, signal, onUpdate, context) {
-          const executionDefinition = createBashToolDefinition(options.cwd, {
-            commandPrefix: options.settings.getShellCommandPrefix(),
-            operations: createProjectCommandBashOperations({
+        async execute(toolCallId, params, signal, onUpdate, context) {
+          const sudoPasswords = options.sudoPasswords;
+          const needsPassword = sudoPasswords !== undefined
+            && commandNeedsSudo(params.command)
+            && !signal?.aborted;
+          const password = needsPassword
+            ? await sudoPasswords.requestPassword(params.command, signal)
+            : undefined;
+          let askpass: ReturnType<typeof createSudoAskpass> | undefined;
+          try {
+            askpass = password ? createSudoAskpass(password) : undefined;
+            const operations = createProjectCommandBashOperations({
               shellPath: options.settings.getShellPath(),
-            }),
-          });
-          return executionDefinition.execute(toolCallId, params, signal, onUpdate, context);
+            });
+            const executionDefinition = createBashToolDefinition(options.cwd, {
+              commandPrefix: composeCommandPrefix(
+                options.settings.getShellCommandPrefix(),
+                askpass ? sudoShellPrefix(askpass.scriptPath) : undefined,
+              ),
+              operations: askpass
+                ? withSudoFailureDetection(operations, () => sudoPasswords?.forgetPassword())
+                : operations,
+            });
+            return await executionDefinition.execute(toolCallId, params, signal, onUpdate, context);
+          } finally {
+            // Deleted in the tool's own frame: a later `ps`/read cannot reach it,
+            // and a failed command cannot leave the password on disk.
+            try {
+              askpass?.dispose();
+            } catch {
+              // Cleanup must never replace the command's own result or error.
+            }
+          }
         },
       });
     },

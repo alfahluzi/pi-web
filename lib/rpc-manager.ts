@@ -11,7 +11,9 @@ import {
   createProjectCommandBashExtension,
   createProjectCommandBashOperations,
   preferUserBashExtension,
+  type SudoPasswordSource,
 } from "./project-command-env";
+import { SudoPasswordCache, SUDO_PROMPT_TIMEOUT_MS, sudoCommandPreview } from "./sudo-prompt";
 import { cacheSessionPath, getLatestModelChange, invalidateSessionListCache, readLatestSessionEntryId, resolveSessionPath } from "./session-reader";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { persistExplicitStartupPreferences } from "./startup-preferences";
@@ -119,6 +121,40 @@ type ExtensionUiRequestBody = Record<string, unknown> & {
   timeout?: number;
   expiresAt?: number;
 };
+
+/** An `input` request without the fields `requestExtensionUi` adds itself. */
+type SecretInputRequest = Omit<Extract<ExtensionUiRequest, { method: "input" }>, "type" | "id">;
+
+/**
+ * The sudo prompt, typed against the wire shape on purpose.
+ *
+ * `ExtensionUiRequestBody` is an open record, so a typo in `secret` would still
+ * compile and the browser would fall back to a plain text field. Declaring the
+ * shape here makes that a type error instead of a leaked password.
+ */
+function sudoPasswordInputRequest(command: string): SecretInputRequest {
+  return {
+    method: "input",
+    title: "sudo password",
+    secret: true,
+    command: sudoCommandPreview(command),
+    placeholder: "password for sudo",
+  };
+}
+
+/** Resolve when `promise` settles or `signal` aborts, whichever happens first. */
+function raceAbort(promise: Promise<unknown>, signal?: AbortSignal): Promise<unknown> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      signal.removeEventListener("abort", done);
+      resolve(undefined);
+    };
+    signal.addEventListener("abort", done, { once: true });
+    void promise.then(done, done);
+  });
+}
 
 type ExtensionCommandContextActionsLike = {
   waitForIdle: () => Promise<void>;
@@ -282,6 +318,11 @@ export class AgentSessionWrapper {
   private extensionWidgetsResetting = false;
   private pendingPromptCount = 0;
   private activeMutatingCommands = 0;
+  // Operator's sudo password, memory only, for SUDO_PASSWORD_TTL_MS. Answering
+  // a prompt must not come back to the model, so it never reaches an event or
+  // a tool result: only the askpass helper spun up for that one command.
+  private sudoPasswords = new SudoPasswordCache();
+  private sudoPromptTail: Promise<void> = Promise.resolve();
   private sessionReplacement: "fork" | "clone" | null = null;
   private agentRunNeedsCompletion = false;
   private promptAdmissionTail: Promise<void> = Promise.resolve();
@@ -1087,6 +1128,7 @@ export class AgentSessionWrapper {
     this.pendingQuestionnaire = null;
     this.pendingUiResponses.clear();
     this.pendingUiRequests.clear();
+    this.sudoPasswords.clear();
     this.activeToolEvents.clear();
     this.clearExtensionWidgets(false);
 
@@ -1155,6 +1197,74 @@ export class AgentSessionWrapper {
     const pending = this.pendingUiResponses.get(response.id);
     if (!pending) return;
     pending.resolve(response);
+  }
+
+  /**
+   * Askpass plumbing for the built-in bash tool.
+   *
+   * The extension runs inside this wrapper's process, so it can borrow the same
+   * prompt/response channel the extension dialogs use. `forgetPassword` exists
+   * because sudo rejects a wrong value only after three attempts: keeping it
+   * cached would then fail every later command for the whole TTL.
+   */
+  createSudoPasswordSource(): SudoPasswordSource {
+    return {
+      requestPassword: (command, signal) => this.requestSudoPassword(command, signal),
+      forgetPassword: () => this.sudoPasswords.clear(),
+    };
+  }
+
+  /**
+   * Prompt the browser for the operator's sudo password.
+   *
+   * Resolves `undefined` on cancel, timeout, abort, or an empty answer: the
+   * command then runs exactly as it would have without this feature, and sudo
+   * reports its own "a terminal is required" error. Throwing instead would turn
+   * a declined dialog into a broken tool call the model has to guess about.
+   */
+  async requestSudoPassword(command: string, signal?: AbortSignal): Promise<string | undefined> {
+    if (!this.isAlive() || signal?.aborted) return undefined;
+    const cached = this.sudoPasswords.peek();
+    if (cached) return cached;
+    // One dialog at a time: parallel bash calls would otherwise stack prompts
+    // the operator cannot tell apart, and the second answer would be pointless.
+    const previous = this.sudoPromptTail;
+    let release: () => void = () => {};
+    this.sudoPromptTail = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      // Waiting for the dialog ahead of us must still honour Stop: otherwise a
+      // queued bash call stays blocked for up to SUDO_PROMPT_TIMEOUT_MS after
+      // the run was cancelled.
+      await raceAbort(previous, signal);
+      const answered = this.sudoPasswords.peek();
+      if (answered) return answered;
+      // The wrapper may have been destroyed while this call waited its turn; a
+      // prompt emitted now would never be answered or closed.
+      if (!this.isAlive() || signal?.aborted) return undefined;
+      let answer: string | undefined;
+      try {
+        answer = await this.requestExtensionUi<string | undefined>(
+          // Typed as the wire shape so a misspelled `secret` cannot silently fall
+          // back to a plain text field.
+          sudoPasswordInputRequest(command),
+          undefined,
+          (response) => ("value" in response ? response.value : undefined),
+          SUDO_PROMPT_TIMEOUT_MS,
+          signal,
+        );
+      } catch {
+        // Stop aborts the UI channel; the run is being cancelled anyway.
+        return undefined;
+      }
+      // Only the line break Enter adds is stripped. Trimming spaces would silently
+      // corrupt a password that begins or ends with one.
+      const password = answer?.replace(/[\r\n]+$/, "");
+      if (!password) return undefined;
+      this.sudoPasswords.remember(password);
+      return password;
+    } finally {
+      release();
+    }
   }
 
   private getExtensionStatuses(): Array<{ key: string; text: string }> {
@@ -2179,6 +2289,9 @@ export async function startRpcSession(
     // after the session is created, so the getter is filled in below.
     const exactSystemPromptRef: { current?: () => string } = {};
     const exactSystemPromptExtension = createExactSystemPromptExtension(() => exactSystemPromptRef.current?.());
+    // The bash extension is built before the wrapper exists, so its sudo
+    // prompter is a forward reference filled in right after construction.
+    const sudoPasswordSourceRef: { current?: SudoPasswordSource } = {};
     const usesExactSystemPrompt = chatOnly || subagentResources?.exactSystemPrompt !== undefined;
     const services = await createAgentSessionServices({
       cwd: sessionCwd,
@@ -2207,6 +2320,12 @@ export async function startRpcSession(
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
                 settings: settingsManager,
+                sudoPasswords: {
+                  requestPassword: (command, signal) => (
+                    sudoPasswordSourceRef.current?.requestPassword(command, signal) ?? Promise.resolve(undefined)
+                  ),
+                  forgetPassword: () => sudoPasswordSourceRef.current?.forgetPassword(),
+                },
               }),
               createSubagentExtension(
                 SUBAGENT_CONTROLLER.extensionRuntime,
@@ -2301,6 +2420,7 @@ export async function startRpcSession(
       suppressCompletionNotifications: Boolean(subagentResources),
     });
     const realSessionId = inner.sessionId as string;
+    sudoPasswordSourceRef.current = wrapper.createSudoPasswordSource();
     registerRpcWrapper(wrapper);
 
     return { session: wrapper, realSessionId };

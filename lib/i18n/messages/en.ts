@@ -331,6 +331,7 @@ export const enLocale: LocalePlugin = {
     "chat.extensionPending": "Awaiting response",
     "chat.extensionCollapse": "Collapse",
     "chat.extensionExpand": "Expand",
+    "chat.extensionSecretNote": "Handed straight to sudo by this Pi Web server. It is never added to this conversation.",
     "chat.cancel": "Cancel",
     "chat.confirm": "Confirm",
     "chat.submit": "Submit",

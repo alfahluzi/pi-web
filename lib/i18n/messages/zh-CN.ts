@@ -331,6 +331,7 @@ export const zhCNLocale: LocalePlugin = {
     "chat.extensionPending": "待回答",
     "chat.extensionCollapse": "收起",
     "chat.extensionExpand": "展开",
+    "chat.extensionSecretNote": "由本机 Pi Web 服务器直接交给 sudo，不会写入本对话。",
     "chat.cancel": "取消",
     "chat.confirm": "确认",
     "chat.submit": "提交",

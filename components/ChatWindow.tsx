@@ -1706,25 +1706,58 @@ function ExtensionDialog({
             </div>
           )}
           {request.method === "input" && (
-            <input
-              autoFocus
-              value={value}
-              placeholder={request.placeholder}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.nativeEvent.isComposing) submitValue();
-              }}
-              style={{
-                width: "100%",
-                padding: "9px 10px",
-                borderRadius: 7,
-                border: "1px solid var(--border)",
-                background: "var(--bg-panel)",
-                color: "var(--text)",
-                outline: "none",
-                fontSize: 13,
-              }}
-            />
+            <div style={{ display: "grid", gap: 8 }}>
+              {request.command && (
+                <div
+                  style={{
+                    padding: "8px 10px",
+                    borderRadius: 7,
+                    border: "1px solid var(--border)",
+                    background: "var(--bg-panel)",
+                    color: "var(--text-muted)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                    maxHeight: 180,
+                    overflow: "auto",
+                    whiteSpace: "pre-wrap",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {request.command}
+                </div>
+              )}
+              <input
+                autoFocus
+                type={request.secret ? "password" : "text"}
+                value={value}
+                placeholder={request.placeholder}
+                // A password manager filling this field would put a saved login
+                // into sudo, so the secret field opts out of autocomplete entirely.
+                autoComplete={request.secret ? "new-password" : undefined}
+                autoCorrect={request.secret ? "off" : undefined}
+                spellCheck={request.secret ? false : undefined}
+                onChange={(e) => setValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) submitValue();
+                }}
+                style={{
+                  width: "100%",
+                  padding: "9px 10px",
+                  borderRadius: 7,
+                  border: "1px solid var(--border)",
+                  background: "var(--bg-panel)",
+                  color: "var(--text)",
+                  outline: "none",
+                  fontSize: 13,
+                }}
+              />
+              {request.secret && (
+                <div style={{ color: "var(--text-dim)", fontSize: 11, lineHeight: 1.5 }}>
+                  {t("chat.extensionSecretNote")}
+                </div>
+              )}
+            </div>
           )}
           {request.method === "editor" && (
             <textarea
