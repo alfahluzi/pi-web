@@ -19,8 +19,8 @@ export const runtime = "nodejs";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
-function refusal(status: number, code: string, error: string) {
-  return NextResponse.json({ error, code }, { status, headers: NO_STORE });
+function refusal(status: number, code: string, error: string, detail?: string) {
+  return NextResponse.json({ error, code, ...(detail ? { detail } : {}) }, { status, headers: NO_STORE });
 }
 
 /** What the sidebar needs to show the move before it happens. */
@@ -56,7 +56,9 @@ export async function POST(req: Request) {
 
   try {
     const prepared = await prepareProjectMove({ root, target });
-    if (!prepared.ok) return refusal(prepared.refusal.status, prepared.refusal.code, prepared.refusal.error);
+    if (!prepared.ok) {
+      return refusal(prepared.refusal.status, prepared.refusal.code, prepared.refusal.error, prepared.refusal.detail);
+    }
     if (dryRun === true) {
       return NextResponse.json({ plan: planSummary(prepared.plan) }, { headers: NO_STORE });
     }

@@ -112,20 +112,38 @@ export function forkFailureMessage(code: string | undefined, error: string): { k
 
 /**
  * Why POST /api/projects/move refused a move, as a message key and its
- * parameters (the route's `code`). The cases a person can act on say what to do
- * next; anything else shows the server's own text, which names the path.
+ * parameters (the route's `code`, and its `detail` for a code that covers
+ * several cases, such as a protected folder). The cases a person can act on
+ * say what to do next; anything else shows the server's own text, which names
+ * the path.
  */
-export function projectMoveRefusalMessage(code: string | undefined, error: string): { key: string; params?: { error: string } } {
+export function projectMoveRefusalMessage(
+  code: string | undefined,
+  error: string,
+  detail?: string,
+): { key: string; params?: { error: string } } {
   switch (code) {
     case "sessions-running": return { key: "sidebar.moveProjectRunning" };
     case "destination-exists": return { key: "sidebar.moveProjectDestinationExists" };
     case "target-inside-source": return { key: "sidebar.moveProjectInsideSource" };
     case "invalid-target": return { key: "sidebar.moveProjectInvalidTarget" };
-    case "source-protected": return { key: "sidebar.moveProjectProtected" };
     case "source-symbolic-link": return { key: "sidebar.moveProjectSymlink" };
-    case "target-protected": return { key: "sidebar.moveProjectTargetProtected" };
     case "cross-device": return { key: "sidebar.moveProjectCrossDevice" };
     case "permission-denied": return { key: "sidebar.moveProjectPermission" };
+    case "source-protected":
+      switch (detail) {
+        case "server-cwd": return { key: "sidebar.moveProjectProtectedServer" };
+        case "home": return { key: "sidebar.moveProjectProtectedHome" };
+        case "agent-dir": return { key: "sidebar.moveProjectProtectedAgent" };
+        case "root": return { key: "sidebar.moveProjectProtectedRoot" };
+        default: return { key: "sidebar.moveProjectProtected" };
+      }
+    case "target-protected":
+      switch (detail) {
+        case "server-cwd": return { key: "sidebar.moveProjectTargetServer" };
+        case "agent-dir": return { key: "sidebar.moveProjectTargetAgent" };
+        default: return { key: "sidebar.moveProjectTargetProtected" };
+      }
     default: return { key: "sidebar.moveProjectFailed", params: { error } };
   }
 }

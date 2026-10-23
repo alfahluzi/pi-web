@@ -83,10 +83,11 @@ export function ProjectMoveForm({
       plan?: ProjectMovePlanSummary;
       moved?: ProjectMoveOutcome;
       code?: string;
+      detail?: string;
       error?: string;
     };
     if (!response.ok) {
-      const message = projectMoveRefusalMessage(data.code, data.error ?? `HTTP ${response.status}`);
+      const message = projectMoveRefusalMessage(data.code, data.error ?? `HTTP ${response.status}`, data.detail);
       setError(t(message.key, message.params));
       return null;
     }

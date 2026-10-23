@@ -69,7 +69,14 @@ export interface ProjectMoveRefusal {
   code: ProjectMoveRefusalCode;
   /** HTTP status the route answers with. */
   status: number;
+  /** English diagnostic text, naming the path where it helps. */
   error: string;
+  /**
+   * Which case of a multi-reason code this is (`home`, `server-cwd`,
+   * `agent-dir`, `root`), so the sidebar can word it in the user's language
+   * instead of showing one generic sentence and the raw text.
+   */
+  detail?: string;
 }
 
 /** One session file that goes with the project. */
@@ -130,8 +137,13 @@ function realPathOrSelf(path: string): string {
   }
 }
 
-function refusal(code: ProjectMoveRefusalCode, status: number, error: string): { ok: false; refusal: ProjectMoveRefusal } {
-  return { ok: false, refusal: { code, status, error } };
+function refusal(
+  code: ProjectMoveRefusalCode,
+  status: number,
+  error: string,
+  detail?: string,
+): { ok: false; refusal: ProjectMoveRefusal } {
+  return { ok: false, refusal: { code, status, error, ...(detail ? { detail } : {}) } };
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -215,16 +227,18 @@ export async function prepareProjectMove(request: {
   const source = realPathOrSelf(resolve(rawRoot));
 
   // Folders whose move would break the machine or the server answering this request.
-  if (dirname(source) === source) return refusal("source-protected", 409, "The filesystem root cannot be moved");
+  if (dirname(source) === source) {
+    return refusal("source-protected", 409, "The filesystem root cannot be moved", "root");
+  }
   if (isPathAtOrUnder(home, source)) {
-    return refusal("source-protected", 409, `This folder contains the home directory: ${source}`);
+    return refusal("source-protected", 409, `This folder contains the home directory: ${source}`, "home");
   }
   if (isPathAtOrUnder(agentDir, source)) {
-    return refusal("source-protected", 409, `This folder contains pi's own agent directory: ${source}`);
+    return refusal("source-protected", 409, `This folder contains pi's own agent directory: ${source}`, "agent-dir");
   }
   const serverCwd = realPathOrSelf(resolve(process.cwd()));
   if (isPathAtOrUnder(serverCwd, source)) {
-    return refusal("source-protected", 409, `pi-web is running from this folder: ${source}`);
+    return refusal("source-protected", 409, `pi-web is running from this folder: ${source}`, "server-cwd");
   }
 
   const typedTarget = expandProjectTarget(request.target ?? "", home);
@@ -246,9 +260,12 @@ export async function prepareProjectMove(request: {
   // The destination is refused where a project must never land: pi's own agent
   // directory (its sessions and state live there) and the folder pi-web itself
   // runs from (a checkout that watches its own tree).
-  for (const [label, protectedPath] of [["pi's agent directory", agentDir], ["pi-web's own folder", serverCwd]] as const) {
+  for (const [label, detail, protectedPath] of [
+    ["pi's agent directory", "agent-dir", agentDir],
+    ["pi-web's own folder", "server-cwd", serverCwd],
+  ] as const) {
     if (isPathAtOrUnder(destination, protectedPath)) {
-      return refusal("target-protected", 409, `A project cannot be moved into ${label}: ${destination}`);
+      return refusal("target-protected", 409, `A project cannot be moved into ${label}: ${destination}`, detail);
     }
   }
 
