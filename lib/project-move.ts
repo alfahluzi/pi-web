@@ -205,6 +205,14 @@ export async function prepareProjectMove(request: {
   target: string;
   home?: string;
   agentDir?: string;
+  /**
+   * Move the folder pi-web itself runs from. Only a caller that has already
+   * stopped every pi-web process may ask for this (`scripts/move-pi-web.sh`):
+   * the guards exist because renaming the folder of the process that answers
+   * the request leaves its cwd, `.next` and the global install dangling mid
+   * flight, and a stopped server has none of those.
+   */
+  allowServerCwd?: boolean;
 }): Promise<{ ok: true; plan: ProjectMovePlan } | { ok: false; refusal: ProjectMoveRefusal }> {
   const home = request.home ?? homedir();
   const agentDir = request.agentDir ?? getAgentDir();
@@ -236,8 +244,10 @@ export async function prepareProjectMove(request: {
   if (isPathAtOrUnder(agentDir, source)) {
     return refusal("source-protected", 409, `This folder contains pi's own agent directory: ${source}`, "agent-dir");
   }
-  const serverCwd = realPathOrSelf(resolve(process.cwd()));
-  if (isPathAtOrUnder(serverCwd, source)) {
+  // Null when the caller has stopped pi-web itself: then no folder is "the
+  // folder it runs from", and both guards below are about that folder.
+  const serverCwd = request.allowServerCwd ? null : realPathOrSelf(resolve(process.cwd()));
+  if (serverCwd !== null && isPathAtOrUnder(serverCwd, source)) {
     return refusal("source-protected", 409, `pi-web is running from this folder: ${source}`, "server-cwd");
   }
 
@@ -260,10 +270,11 @@ export async function prepareProjectMove(request: {
   // The destination is refused where a project must never land: pi's own agent
   // directory (its sessions and state live there) and the folder pi-web itself
   // runs from (a checkout that watches its own tree).
-  for (const [label, detail, protectedPath] of [
+  const protectedTargets: readonly (readonly [string, string, string])[] = [
     ["pi's agent directory", "agent-dir", agentDir],
-    ["pi-web's own folder", "server-cwd", serverCwd],
-  ] as const) {
+    ...(serverCwd === null ? [] : [["pi-web's own folder", "server-cwd", serverCwd] as const]),
+  ];
+  for (const [label, detail, protectedPath] of protectedTargets) {
     if (isPathAtOrUnder(destination, protectedPath)) {
       return refusal("target-protected", 409, `A project cannot be moved into ${label}: ${destination}`, detail);
     }

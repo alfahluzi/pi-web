@@ -249,6 +249,22 @@ is the single source of truth: the original npm install, its
 `@agegr/pi-web.npm-backup` copy, and the former `pi-web` app on port 4200 were
 all removed on 2026-10-01. Revert instructions are at the top of the script.
 
+### Moving the checkout to another folder
+
+`./scripts/move-pi-web.sh <new-path>` moves this checkout, with the history of
+the sessions that ran in it, and puts pi-web back in service from the new path.
+The sidebar's "Move project…" refuses this folder on purpose (it is where pi-web
+runs from), so the script does it with the server stopped: it deletes the PM2
+app, runs `lib/project-move.ts` through `scripts/move-pi-web.mjs` (the same code
+path as the sidebar's move, plus `allowServerCwd`), rebuilds (`.next` holds
+absolute paths), then hands over to `./deploy-to-pi-web.sh`, which repoints
+`~/.local/lib/node_modules/@agegr/pi-web` and starts the app. Any failure after
+the move rolls back — folder and sessions both — and restarts the old path.
+
+`--dry-run` validates and prints the plan without stopping anything. The
+destination must keep the folder's name, must not exist, and must be on the same
+filesystem; a dirty checkout is refused unless `--force`.
+
 ### Promoting a verified `custom-next` to `custom`
 
 Restarting pi-web ends any running agent session (including the one you are
