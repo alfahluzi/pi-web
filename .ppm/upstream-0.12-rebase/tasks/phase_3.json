@@ -1,0 +1,70 @@
+{
+  "phase": "phase_3",
+  "title": "Hop to v0.12.0, v0.12.1 and v0.12.2",
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Rebase onto v0.12.0 and reconcile upstream's right-panel work",
+      "agent": "implement",
+      "files": [
+        "components/AppShell.tsx",
+        "components/ChatWindow.tsx",
+        "components/TabBar.tsx",
+        "components/WebPanelFrame.tsx",
+        "components/SubagentViewer.tsx",
+        "lib/panel-layout.ts",
+        "lib/web-panels.ts",
+        "lib/web-panel-manifest.ts",
+        "lib/web-panel-tab-state.ts",
+        "lib/api-types.ts",
+        "app/api/files/[...path]/route.ts",
+        "lib/rpc-manager.ts",
+        "lib/i18n/messages/en.ts",
+        "lib/i18n/messages/zh-CN.ts",
+        "lib/i18n/messages/zh-TW.ts",
+        "AGENTS.md",
+        "package.json"
+      ],
+      "detail": "Goal: land the fork on v0.12.0 (pi 1.1.0) with the plugin panel tab kind still working next to upstream's new subagent panel tab.\nFiles: listed above covers the conflicts plus the panel files both sides own; `package-lock.json` is regenerated in this task's own npm install.\nContract: upstream v0.12.0 added `components/SubagentViewer.tsx` and `lib/panel-layout.ts` and grows MCP/codemode features. The fork added a plugin panel tab (`kind: \"plugin\"`), `WebPanelFrame` postMessage bridge, `lib/web-panels.ts`, `lib/web-panel-manifest.ts`, and `components/web-panel-tab-state.ts`. Policy:\n- Adopt upstream's panel layout/state machinery as the single tab model; re-express the fork plugin tab inside it (same `kind: \"plugin\"` identity, same manifest reconciliation) instead of keeping a parallel layout implementation.\n- `WebPanelFrame` keeps its sandbox attributes, single-load `src` and `open-file` bridge; only its lifecycle hooks change to match the new host.\n- AGENTS.md: keep upstream text, re-add the fork sections, and rewrite the web-panel section to describe the reconciled model.\n- All other conflicts: take upstream, re-apply fork-only additions per the phase_1 policy.\nSteps:\n1. `git rebase --onto v0.12.0 fork-next-v0.11.1`.\n2. Resolve per policy, commit by commit.\n3. `npm install`, then `node_modules/.bin/tsc --noEmit`; fix drift at its source.\nVerify: `git status` clean, no conflict markers, tsc exit 0.\nDone when: the fork builds on v0.12.0 with plugin panels and subagent panels coexisting.",
+      "status": "completed",
+      "progress": "[2026-10-23T07:35:01Z] rebase --onto v0.12.0 v0.11.1 selesai (11 commit di atas v0.12.0). Konflik: FileViewer.tsx (state htmlFull + editor state; hasPreview HTML penuh + canEdit/effectiveDisplayMode), rpc-manager.ts (import union: sudo-prompt + catalogFirstMessage/getLatestModelChange). Panel upstream (SubagentViewer/panel-layout) sudah terpasang dan tab plugin fork hidup berdampingan (tab kind terminal|agent|plugin). tsc exit 0; npm test 2723 pass / 0 fail (jumlah turun karena upstream v0.12.0 sendiri menggabung/hapus 15 file test). Delta fork vs v0.12.0 hanya file milik fork.",
+      "pre_request": []
+    },
+    {
+      "id": "TASK-002",
+      "title": "Rebase onto v0.12.1 (pi SDK 1.2.0) and absorb the major SDK bump",
+      "agent": "implement",
+      "files": [
+        "lib/rpc-manager.ts",
+        "lib/pi-types.ts",
+        "lib/exact-system-prompt.ts",
+        "lib/project-command-env.ts",
+        "package.json",
+        "package-lock.json"
+      ],
+      "detail": "Goal: keep the fork's SDK-facing patches (extension run mode, exact system prompt, sudo askpass bash wrapper) working on pi 1.2.0.\nFiles: SDK adapter and type files only; unrelated UI files must not be touched here.\nContract: v0.12.1 moves pi from 1.1.0 to 1.2.0. The fork's SDK touchpoints are `PI_WEB_EXTENSION_MODE`, the omitted `onTerminalInput`, percentage overlay widths, the `before_agent_start` exact-prompt extension, and the sudo askpass prefix in the bash tool wrapper. None may be dropped: each has a unit test (`lib/rpc-manager.test.mjs`, `lib/project-command-env.test.mjs`) or is documented in AGENTS.md.\nSteps:\n1. `git rebase --onto v0.12.1 v0.12.0`.\n2. Resolve conflicts, then `npm install` for pi 1.2.0.\n3. `node_modules/.bin/tsc --noEmit`; port each fork patch to the new SDK shape if a signature moved.\n4. `npm test`; update fork tests only where the upstream contract legitimately changed, never to hide a lost behaviour.\nVerify: tsc exit 0, `npm test` green including `rpc-manager` and `project-command-env` suites.\nDone when: pi 1.2.0 compiles with all fork SDK patches intact.",
+      "status": "completed",
+      "progress": "[2026-10-23T07:37:17Z] rebase --onto v0.12.1 v0.12.0 selesai. Konflik: package.json (19 dep codemirror + blok pi 1.2.0 termasuk pi-mcp/pi-codemode/pi-telemetry), package-lock (diambil upstream lalu diregenerasi npm). SDK 1.2.0 TIDAK butuh perubahan kode: PI_WEB_EXTENSION_MODE, onTerminalInput absen, overlay width, exact system prompt, dan sudo askpass tetap compile. npm install -> pi-coding-agent 1.2.0; tsc --noEmit exit 0; npm test 2726 pass / 0 fail; commit lockfile.",
+      "pre_request": [
+        "TASK-001"
+      ]
+    },
+    {
+      "id": "TASK-003",
+      "title": "Rebase onto v0.12.2 and tag the final hop",
+      "agent": "verify",
+      "files": [
+        "package.json",
+        "package-lock.json",
+        "AGENTS.md",
+        "LOCAL-CHANGES.md"
+      ],
+      "detail": "Goal: finish the chain on upstream v0.12.2 (the current release) with a fully green worktree.\nFiles: metadata and documentation; no source file should need a change on a fix-only release.\nContract: v0.12.2 keeps pi 1.2.0 and Next 16.3.8. `LOCAL-CHANGES.md` must describe the rebased fork base (`v0.12.2`) and keep the MIT attribution block.\nSteps:\n1. `git rebase --onto v0.12.2 v0.12.1`.\n2. Resolve metadata conflicts only; `npm install` if the lockfile moved.\n3. `node_modules/.bin/tsc --noEmit`, `npm test`, `npm run lint`.\n4. Update `LOCAL-CHANGES.md`: fork base becomes v0.12.2, list the fork features that survived, note anything upstream replaced.\n5. Commit and `git tag fork-next-v0.12.2`.\nVerify: tsc exit 0, tests green, lint clean, tags `fork-next-v0.10.0`, `fork-next-v0.11.1`, `fork-next-v0.12.2` all resolve, `git rev-list --count v0.12.2..HEAD` equals the fork commit count.\nDone when: the worktree sits on v0.12.2 and every check passes.",
+      "status": "completed",
+      "progress": "[2026-10-23T07:47:09Z] rebase --onto v0.12.2 v0.12.1 selesai (13 commit di atas v0.12.2). Konflik: AppShell (toggle subagent + title change panel plugin), AGENTS.md (file map), files route (upstream punya map EXT_TO_LANGUAGE/getLanguage sendiri -> import lib/file-language dibuang, alias tsx/jsx/markup ditambah di lib/code-languages.ts, lib/file-language.ts + test dihapus), FileViewer.test.mjs (blok test upstream + fork disatukan dan 'canEdit' ditambahkan ke daftar kalkulasi yang diekstrak), project-command-env.ts (defaultActive + async execute sudo askpass), i18n (sidebar.pinned duplikat dihapus; tidak ada nilai locale yang menyimpang dari upstream). npm install pi 1.2.0; tsc --noEmit exit 0; npm test 2874 pass / 0 fail; eslint clean. Tag fork-next-v0.12.2 = 55faa2c.",
+      "pre_request": [
+        "TASK-002"
+      ]
+    }
+  ]
+}

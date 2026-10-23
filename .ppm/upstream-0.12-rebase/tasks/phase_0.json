@@ -1,0 +1,28 @@
+{
+  "phase": "phase_0",
+  "title": "Safety net and isolated bench",
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Freeze the deployable custom branch and create the isolated worktree",
+      "agent": "implement",
+      "files": [],
+      "detail": "Goal: guarantee the deployable checkout can never be damaged by the rebase work, and give the rebase its own working tree.\nFiles: no repo files. Git metadata only: tag `fork-deploy-0.9.3`, worktree /home/ljosalfar-server/Documents/pi-web-upstream, branch `custom-next`.\nContract: main checkout /home/ljosalfar-server/Documents/pi-web stays on branch `custom` at commit 7092dba with a clean `git status`; the live `pm2 pi-web-custom` app (port 4201, next-server) must keep running because it hosts the active agent session.\nSteps:\n1. cd /home/ljosalfar-server/Documents/pi-web; confirm `git status --porcelain` prints nothing.\n2. `git tag -f fork-deploy-0.9.3 custom` so the pre-rebase deploy point is named.\n3. `git worktree add -b custom-next /home/ljosalfar-server/Documents/pi-web-upstream custom`.\n4. Never run npm install, npm run build, or git checkout in the main checkout afterwards.\nVerify: `git -C /home/ljosalfar-server/Documents/pi-web status -sb` shows `## custom...origin/custom` and no changes; `git -C /home/ljosalfar-server/Documents/pi-web-upstream rev-parse --abbrev-ref HEAD` prints `custom-next`; `lsof -nP -iTCP:4201 -sTCP:LISTEN` still lists the next-server process.\nDone when: the tag exists, the worktree is on custom-next at 7092dba, and the running app is untouched.",
+      "status": "completed",
+      "progress": "[2026-10-23T06:51:33Z] tag fork-deploy-0.9.3 = 7092dba; worktree /home/ljosalfar-server/Documents/pi-web-upstream on branch custom-next; main checkout still ## custom...origin/custom clean; live pm2 pi-web-custom pid 13973 (next-server 13992) listening 0.0.0.0:4201 untouched.",
+      "pre_request": []
+    },
+    {
+      "id": "TASK-002",
+      "title": "Install the worktree and record a green 0.9.3 baseline",
+      "agent": "verify",
+      "files": [],
+      "detail": "Goal: prove the worktree reproduces the current fork behaviour before any rebase, so later failures are attributable to the rebase.\nFiles: writes only to worktree-local node_modules/ (untracked). Must not touch the main checkout.\nContract: run everything with cwd /home/ljosalfar-server/Documents/pi-web-upstream.\nSteps:\n1. `npm install` (installs pi SDK 0.87.1 from the committed lockfile; postinstall runs bin/prepare-terminal.js).\n2. `node_modules/.bin/tsc --noEmit` — record the exit code and the first failures, if any.\n3. `npm test` — record pass/fail counts.\n4. Append the three results to this task's progress field via `ppm`.\nVerify: tsc exits 0 and `npm test` reports no failing test. Any pre-existing failure is recorded as a baseline defect, not fixed here.\nDone when: baseline typecheck and unit tests are recorded as evidence.",
+      "status": "completed",
+      "progress": "[2026-10-23T06:53:46Z] npm install ok (pi-coding-agent 0.87.1); tsc --noEmit exit 0 (14.5s); npm test 1419 pass / 0 fail (38s). Baseline green.",
+      "pre_request": [
+        "TASK-001"
+      ]
+    }
+  ]
+}

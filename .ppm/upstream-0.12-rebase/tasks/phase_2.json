@@ -1,0 +1,47 @@
+{
+  "phase": "phase_2",
+  "title": "Hop to v0.11.0 and v0.11.1",
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Rebase onto v0.11.0 (pi 1.1.0, Next 16.3.8) and reconcile the rewritten sidebar",
+      "agent": "implement",
+      "files": [
+        "components/SessionSidebar.tsx",
+        "components/SessionTree.tsx",
+        "components/SidebarMenu.tsx",
+        "components/AppShell.tsx",
+        "components/ChatWindow.tsx",
+        "app/api/files/[...path]/route.ts",
+        "lib/api-types.ts",
+        "lib/rpc-manager.ts",
+        "lib/i18n/messages/en.ts",
+        "lib/i18n/messages/zh-CN.ts",
+        "lib/i18n/messages/zh-TW.ts",
+        "AGENTS.md",
+        "README.md",
+        "package.json"
+      ],
+      "detail": "Goal: move all fork commits from fork-next-v0.10.0 onto v0.11.0 without losing the fork's session pins or file-tab behaviour.\nFiles: listed above are the files git conflicts on plus the sidebar files upstream restructured in this release; `package-lock.json` belongs to the verify task.\nContract: upstream v0.11.0 rewrote the sidebar into `SessionSidebar.tsx` + `SessionTree.tsx` + `SidebarMenu.tsx` + `session-catalog-helpers.ts`, added project groups/archive/project pins, and bumped Next to 16.3.8 and pi to 1.1.0. Upstream's \"pins\" are *project* pins — never confuse them with the fork's session pins (`lib/session-pins.ts`, `lib/session-list-rows.ts`, `pinnedSessionIds`). Resolution policy:\n- Sidebar files: take upstream verbatim first, then re-apply only the fork's session-pin surface: the pinned section header, `pinnedSessionIds` from the session list payload, the toggle call to `POST /api/sessions/pinned`, and row heights from `lib/session-list-rows.ts`. Where upstream's own row model (`lib/session-list-rows.ts` may now conflict) already solves windowing, extend it instead of keeping two models.\n- AGENTS.md: keep upstream text and re-add the fork sections, updating any paragraph that describes the old `SessionSidebar.tsx` layout so it names the new files.\n- README.md, package.json: same policy as the previous hop (fork attribution kept, upstream body/deps/version taken, codemirror deps re-added).\n- Remaining conflicts: take upstream, re-apply fork-only additions as specified in phase_1 TASK-001.\nSteps:\n1. `git rebase --onto v0.11.0 fork-next-v0.10.0`.\n2. Resolve per policy, commit by commit, `git rebase --continue`.\n3. Confirm `git log --oneline v0.11.0..HEAD` still shows exactly the fork commits (plus any fix commits from phase_1).\nVerify: no conflict markers (`git grep -n '^<<<<<<<'` empty), `git status` clean, `git rev-list --count v0.11.0..HEAD` equals the fork commit count carried from phase_1.\nDone when: the rebase is finished and the fork's session-pin surface exists in the new sidebar structure.",
+      "status": "completed",
+      "progress": "[2026-10-23T07:23:39Z] rebase --onto v0.11.0 v0.10.0 selesai (catatan: percobaan pertama salah range --onto v0.11.0 fork-next-v0.10.0 sempat membuang commit; dipulihkan via git reset --hard fork-next-v0.10.0, lalu range benar). Konflik: AppShell (useTheme+useFontPreferences), ChatWindow (union), package.json (codemirror + pi 1.1.0), files route (getFileTreeHiddenReasons + getLanguage), rpc-manager (buang usesExactSystemPrompt yang sudah dihapus upstream, simpan sudoPasswordSourceRef), SessionSidebar diambil --ours karena upstream menulis ulang sidebar. TEMUAN PENTING: upstream v0.11.0 sudah punya session pins lewat app/api/sessions/ui-state + lib/session-ui-state.ts, jadi implementasi pin fork (lib/session-pins.ts, session-pin-order.ts, session-list-rows.ts, app/api/sessions/pinned) DIHAPUS dan sidebar memakai model upstream. i18n duplikat (sidebar.pinned/pin/unpin) dibersihkan dan nilai upstream dipulihkan. Commit 036992d. tsc exit 0, npm test 2775 pass / 0 fail.",
+      "pre_request": []
+    },
+    {
+      "id": "TASK-002",
+      "title": "Rebase onto v0.11.1 and tag both hops after verification",
+      "agent": "implement",
+      "files": [
+        "package.json",
+        "package-lock.json",
+        "AGENTS.md"
+      ],
+      "detail": "Goal: absorb the small v0.11.1 fix release and produce a green, tagged v0.11.1 state.\nFiles: only `package.json` (version), `package-lock.json` (regenerated), and `AGENTS.md` if upstream documents new behaviour there.\nContract: v0.11.1 keeps pi 1.1.0 and Next 16.3.8 and is fix-only, so expected conflicts are limited to version/package metadata; anything else means upstream slipped a refactor into the patch release and must be resolved with the phase_1 policy.\nSteps:\n1. `git rebase --onto v0.11.1 v0.11.0`.\n2. Resolve any conflict with the carried policy, then `npm install`.\n3. `node_modules/.bin/tsc --noEmit`, `npm test`, `npm run lint`.\n4. Fix drift at its source, commit, then `git tag fork-next-v0.11.1`.\nVerify: tsc exit 0, tests green, lint clean, tag present, `git log --oneline v0.11.1..HEAD` equals the fork commit list.\nDone when: v0.11.1 hop is green and tagged, with output recorded in progress.",
+      "status": "completed",
+      "progress": "[2026-10-23T07:31:40Z] rebase --onto v0.11.1 v0.11.0 selesai. Konflik: AppShell (panelTabs/handler agent+plugin+plan tabs, handleCloseFileTab: cabang agent + konfirmasi dirty), TabBar (kind terminal|agent|plugin + ikon), AGENTS.md (file map: baris plugin+agent+DelimitedTable), files route, FileViewer (DelimitedTable & canEdit), FileViewer.test.mjs (union nama helper), sessions/route.ts (ambil payload upstream tanpa pinnedSessionIds). Sisa fragmen callback plan panel (setRightPanelOpen/isMobile) digabung ke handleOpenWebPanel dan panelTabs dikembalikan ke bentuk satu baris yang di-assert test. npm install pi 1.1.0; tsc exit 0; npm test 3024 pass / 0 fail. Commit ad6322e; tag fork-next-v0.11.1.",
+      "pre_request": [
+        "TASK-001"
+      ]
+    }
+  ]
+}
