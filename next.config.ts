@@ -77,6 +77,13 @@ const nextConfig: NextConfig = {
     "172.30.*.*",
     "172.31.*.*",
     "192.168.*.*",
+    // Hosts this deployment is reached through (a tunnel or reverse proxy) must
+    // be allowed too, or their chunks are 403 and the page stays on its loading
+    // shell forever. PI_WEB_ALLOWED_HOSTS is the list the app already trusts.
+    ...(process.env.PI_WEB_ALLOWED_HOSTS ?? "")
+      .split(",")
+      .map((host) => host.trim())
+      .filter(Boolean),
   ],
   async headers() {
     return [
