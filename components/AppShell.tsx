@@ -541,30 +541,25 @@ export function AppShell() {
   // Subagent work tabs are session-scoped and transient: no persistence, and
   // they are dropped when the project changes (they belong to its sessions).
   const [agentTabs, setAgentTabs] = useState<{ sessionId: string; label: string }[]>([]);
-  const panelTabs: Tab[] = [
-    ...fileTabs.map((tab) => ({ ...tab, dirty: dirtyFileTabs.has(tab.id) })),
-    ...webPanelTabs.map((tab) => ({
-      id: tab.id,
-      label: tab.title,
-      filePath: tab.url,
-      kind: "plugin" as const,
-      icon: tab.icon,
-      iconSvgPath: tab.iconSvgPath,
-    })),
-    ...terminalTabs.map((tab) => ({
-      id: tab.id,
-      label: getFileName(tab.cwd) || tab.cwd,
-      filePath: tab.cwd,
-      kind: "terminal" as const,
-      closing: Boolean(tab.closing),
-    })),
-    ...agentTabs.map((tab) => ({
-      id: `agent:${tab.sessionId}`,
-      label: tab.label,
-      filePath: tab.label,
-      kind: "agent" as const,
-    })),
-  ];
+  const panelTabs: Tab[] = [...fileTabs.map((tab) => ({ ...tab, dirty: dirtyFileTabs.has(tab.id) })), ...webPanelTabs.map((tab) => ({
+    id: tab.id,
+    label: tab.title,
+    filePath: tab.url,
+    kind: "plugin" as const,
+    icon: tab.icon,
+    iconSvgPath: tab.iconSvgPath,
+  })), ...terminalTabs.map((tab) => ({
+    id: tab.id,
+    label: getFileName(tab.cwd) || tab.cwd,
+    filePath: tab.cwd,
+    kind: "terminal" as const,
+    closing: Boolean(tab.closing),
+  })), ...agentTabs.map((tab) => ({
+    id: `agent:${tab.sessionId}`,
+    label: tab.label,
+    filePath: tab.label,
+    kind: "agent" as const,
+  }))];
 
   useEffect(() => {
     try {
@@ -1239,7 +1234,6 @@ export function AppShell() {
       ? tabs.map((existing) => existing.id === tab.id ? reconcileWebPanelTab(existing, panel) : existing)
       : [...tabs, tab]);
     setActiveFileTabId(tab.id);
-  }, []);
     setRightPanelOpen(true);
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
