@@ -1143,7 +1143,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current;
     // Clear locally so the form disappears with the click; the wrapper also
     // emits its own `closed` update, which is a no-op once the id is gone.
-    setExtensionCustomUi((current) => current?.id === request.id ? null : current);
+    setExtensionCustomUis((queue) => queue.filter((entry) => entry.id !== request.id));
     if (!sid) return;
     try {
       await sendAgentCommand(sid, {
