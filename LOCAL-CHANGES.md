@@ -265,6 +265,18 @@ the move rolls back — folder and sessions both — and restarts the old path.
 destination must keep the folder's name, must not exist, and must be on the same
 filesystem; a dirty checkout is refused unless `--force`.
 
+### Repairing a project moved by hand
+
+`./scripts/repair-session-paths.mjs --from ~/old/path --to ~/new/path` brings the
+history of a project whose folder was moved outside pi-web back into place: each
+session file moves to the new cwd's folder with its header rewritten,
+`parentSession` links are re-pointed, and the sidebar state and `trust.json` are
+re-keyed — the half of "Move project…" that a move outside pi-web never does.
+Without it the group's folder is gone and sending a prompt answers "Directory
+does not exist". `--dry-run` prints what would move. The app must be restarted
+afterwards: a session wrapper opened before the repair holds the old cwd in
+memory.
+
 ### Promoting a verified `custom-next` to `custom`
 
 Restarting pi-web ends any running agent session (including the one you are

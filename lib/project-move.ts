@@ -60,6 +60,8 @@ export type ProjectMoveRefusalCode =
   | "source-not-directory"
   | "source-symbolic-link"
   | "source-protected"
+  | "source-exists"
+  | "invalid-request"
   | "sessions-running"
   | "cross-device"
   | "permission-denied"
@@ -97,6 +99,11 @@ export interface ProjectMoveParentPatch {
 }
 
 export interface ProjectMovePlan {
+  /**
+   * `move` renames the folder first; `repair` is for a folder that already
+   * moved by hand, and only brings its sessions and its sidebar state along.
+   */
+  kind: "move" | "repair";
   source: string;
   /** The directory the project moves into; created when missing. */
   targetDir: string;
@@ -193,6 +200,55 @@ function topLevelCounts(dir: string): { folders: number; files: number } {
     else counts.files += 1;
   }
   return counts;
+}
+
+/**
+ * Every session file that follows a project from `source` to `destination`,
+ * and the ones left outside that name one of them as their parent (a fork's or
+ * a subagent's `parentSession` is an absolute file path, and it moves too).
+ *
+ * Built from the catalogue rather than the project's own directory: a session
+ * opened in a subfolder has a cwd of its own, and `mapPathUnderRoot()` keeps its
+ * relative tail. A path that no longer exists (`repair`) is fine here — the
+ * catalogue's headers are the truth, not the filesystem.
+ */
+async function planProjectSessions(source: string, destination: string): Promise<{
+  sessions: ProjectMoveSession[];
+  parentPatches: ProjectMoveParentPatch[];
+}> {
+const sessionsRoot = sessionsDir();
+const catalogue = await listAllSessions({ force: true });
+const sessions: ProjectMoveSession[] = [];
+const newPathByOld = new Map<string, string>();
+for (const session of catalogue) {
+  if (!session.cwd || !session.path.endsWith(".jsonl")) continue;
+  if (!isPathAtOrUnder(session.cwd, source)) continue;
+  if (!existsSync(session.path)) continue;
+  const newCwd = mapPathUnderRoot(session.cwd, source, destination);
+  if (newCwd === null) continue;
+  const to = join(sessionsRoot, sessionProjectDirName(newCwd), basename(session.path));
+  newPathByOld.set(session.path, to);
+  sessions.push({ id: session.id, from: session.path, to, cwd: session.cwd, newCwd });
+}
+
+// Sessions outside the project that name one of these as their parent keep
+// working: their `parentSession` is display metadata only, so it is re-pointed.
+const parentPatches: ProjectMoveParentPatch[] = [];
+for (const session of catalogue) {
+  if (!session.relation || !session.path.endsWith(".jsonl")) continue;
+  if (newPathByOld.has(session.path)) continue;
+  let parentSession: string | undefined;
+  try {
+    parentSession = readSessionHeader(session.path)?.parentSession;
+  } catch {
+    continue;
+  }
+  if (!parentSession) continue;
+  const to = newPathByOld.get(parentSession);
+  if (to) parentPatches.push({ path: session.path, from: parentSession, to });
+}
+
+  return { sessions, parentPatches };
 }
 
 /**
@@ -301,37 +357,7 @@ export async function prepareProjectMove(request: {
     );
   }
 
-  const sessionsRoot = sessionsDir();
-  const catalogue = await listAllSessions({ force: true });
-  const sessions: ProjectMoveSession[] = [];
-  const newPathByOld = new Map<string, string>();
-  for (const session of catalogue) {
-    if (!session.cwd || !session.path.endsWith(".jsonl")) continue;
-    if (!isPathAtOrUnder(session.cwd, source)) continue;
-    if (!existsSync(session.path)) continue;
-    const newCwd = mapPathUnderRoot(session.cwd, source, destination);
-    if (newCwd === null) continue;
-    const to = join(sessionsRoot, sessionProjectDirName(newCwd), basename(session.path));
-    newPathByOld.set(session.path, to);
-    sessions.push({ id: session.id, from: session.path, to, cwd: session.cwd, newCwd });
-  }
-
-  // Sessions outside the project that name one of these as their parent keep
-  // working: their `parentSession` is display metadata only, so it is re-pointed.
-  const parentPatches: ProjectMoveParentPatch[] = [];
-  for (const session of catalogue) {
-    if (!session.relation || !session.path.endsWith(".jsonl")) continue;
-    if (newPathByOld.has(session.path)) continue;
-    let parentSession: string | undefined;
-    try {
-      parentSession = readSessionHeader(session.path)?.parentSession;
-    } catch {
-      continue;
-    }
-    if (!parentSession) continue;
-    const to = newPathByOld.get(parentSession);
-    if (to) parentPatches.push({ path: session.path, from: parentSession, to });
-  }
+  const { sessions, parentPatches } = await planProjectSessions(source, destination);
 
   const warnings: string[] = [];
   let worktrees: string[] = [];
@@ -347,11 +373,80 @@ export async function prepareProjectMove(request: {
   return {
     ok: true,
     plan: {
+      kind: "move",
       source,
       targetDir,
       targetDirExists: existsSync(targetDir),
       destination,
       targetContents: existsSync(targetDir) ? topLevelCounts(targetDir) : { folders: 0, files: 0 },
+      sessions,
+      parentPatches,
+      openCwds: getOpenRpcSessionCwds().filter((cwd) => isPathAtOrUnder(cwd, source)),
+      worktrees,
+      warnings,
+    },
+  };
+}
+
+/**
+ * Plans the way back for a folder that was moved by hand (`mv`, a file manager,
+ * another tool): the sessions still carry the old cwd, so pi-web shows a project
+ * group whose folder is gone and refuses to run in it. Nothing here renames
+ * anything — the folder is already in its place — so this only re-files each
+ * session under the new cwd, patches the parents that stayed behind, and
+ * re-keys the sidebar state and trust decisions.
+ *
+ * `from` must be gone and `to` must be there: if both exist this is a copy, not
+ * a move, and guessing which history belongs to which would be a coin flip.
+ */
+export async function prepareProjectPathRepair(request: {
+  from: string;
+  to: string;
+}): Promise<{ ok: true; plan: ProjectMovePlan } | { ok: false; refusal: ProjectMoveRefusal }> {
+  const rawFrom = request.from?.trim();
+  const rawTo = request.to?.trim();
+  if (!rawFrom || !rawTo) return refusal("invalid-request", 400, "Both the old and the new path are required");
+
+  let toStat;
+  try {
+    toStat = lstatSync(resolve(rawTo));
+  } catch {
+    return refusal("source-missing", 404, `The new location does not exist: ${rawTo}`);
+  }
+  if (toStat.isSymbolicLink() || !toStat.isDirectory()) {
+    return refusal("target-not-directory", 400, `The new location is not a directory: ${rawTo}`);
+  }
+  if (existsSync(resolve(rawFrom))) {
+    return refusal("source-exists", 409, `The folder is still at ${rawFrom}; move the project instead of repairing it`);
+  }
+
+  const source = realPathOrSelf(resolve(rawFrom));
+  const destination = realPathOrSelf(resolve(rawTo));
+  if (source === destination) return refusal("invalid-request", 400, "The old and the new path are the same");
+
+  const busyCwds = busyCwdsUnder(source);
+  if (busyCwds.length > 0) {
+    return refusal("sessions-running", 409, `A session of this project is running: ${busyCwds.join(", ")}`);
+  }
+
+  const { sessions, parentPatches } = await planProjectSessions(source, destination);
+  const warnings: string[] = [];
+  let worktrees: string[] = [];
+  try {
+    worktrees = (await listWorktrees(destination)).map((worktree) => worktree.path);
+  } catch {
+    // Not a git repository, or git is not installed: nothing to repair.
+  }
+
+  return {
+    ok: true,
+    plan: {
+      kind: "repair",
+      source,
+      targetDir: dirname(destination),
+      targetDirExists: true,
+      destination,
+      targetContents: topLevelCounts(dirname(destination)),
       sessions,
       parentPatches,
       openCwds: getOpenRpcSessionCwds().filter((cwd) => isPathAtOrUnder(cwd, source)),
@@ -514,12 +609,16 @@ export async function executeProjectMove(plan: ProjectMovePlan): Promise<Project
   const errors: string[] = [];
   const warnings = [...plan.warnings];
 
-  try {
-    mkdirSync(plan.targetDir, { recursive: true });
-  } catch (error) {
-    const code = errorCode(error);
-    if (code === "EACCES" || code === "EPERM") throw makeRefusal("permission-denied", 403, `Cannot create ${plan.targetDir}`);
-    throw error;
+  // A repair's folder is already where it belongs: only a move creates and
+  // renames. Everything after this point is the same work either way.
+  if (plan.kind === "move") {
+    try {
+      mkdirSync(plan.targetDir, { recursive: true });
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "EACCES" || code === "EPERM") throw makeRefusal("permission-denied", 403, `Cannot create ${plan.targetDir}`);
+      throw error;
+    }
   }
 
   // The plan was made moments ago; a run may have started in a second window
@@ -539,15 +638,17 @@ export async function executeProjectMove(plan: ProjectMovePlan): Promise<Project
     }
   }
 
-  try {
-    renameSync(plan.source, plan.destination);
-  } catch (error) {
-    const code = errorCode(error);
-    if (code === "EXDEV") throw makeRefusal("cross-device", 409, `The destination is on another filesystem: ${plan.targetDir}`);
-    if (code === "EACCES" || code === "EPERM") throw makeRefusal("permission-denied", 403, `Cannot move into ${plan.targetDir}`);
-    if (code === "ENOTEMPTY" || code === "EEXIST") throw makeRefusal("destination-exists", 409, `Already exists: ${plan.destination}`);
-    if (code === "ENOENT") throw makeRefusal("source-missing", 404, `Project not found: ${plan.source}`);
-    throw error;
+  if (plan.kind === "move") {
+    try {
+      renameSync(plan.source, plan.destination);
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "EXDEV") throw makeRefusal("cross-device", 409, `The destination is on another filesystem: ${plan.targetDir}`);
+      if (code === "EACCES" || code === "EPERM") throw makeRefusal("permission-denied", 403, `Cannot move into ${plan.targetDir}`);
+      if (code === "ENOTEMPTY" || code === "EEXIST") throw makeRefusal("destination-exists", 409, `Already exists: ${plan.destination}`);
+      if (code === "ENOENT") throw makeRefusal("source-missing", 404, `Project not found: ${plan.source}`);
+      throw error;
+    }
   }
 
   const newPathByOld = new Map(plan.sessions.map((move) => [move.from, move.to]));

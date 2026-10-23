@@ -2328,6 +2328,141 @@ select.mcp-add-input {
   min-width: 0;
 }
 
+/* Settings › System prompt (components/SystemPromptConfig.tsx). One column:
+   the two file tabs and the path, the notice that explains what the chosen
+   file does, the editor filling the rest, then the footer. The editor owns the
+   leftover height, so a long prompt scrolls inside CodeMirror and the footer
+   stays put. */
+.system-prompt-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 16px 18px 0;
+}
+
+.system-prompt-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.system-prompt-targets {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.system-prompt-target {
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 4px;
+  outline: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.system-prompt-target[aria-pressed="true"] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.system-prompt-target:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.system-prompt-file {
+  display: flex;
+  flex: 1 1 200px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.system-prompt-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-prompt-size {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.system-prompt-editor {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 180px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.system-prompt-editor .file-editor {
+  height: 100%;
+  min-height: 0;
+}
+
+.system-prompt-placeholder {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: center;
+}
+
+.system-prompt-message,
+.system-prompt-error {
+  flex-shrink: 0;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.system-prompt-message {
+  color: var(--text-muted);
+}
+
+.system-prompt-error {
+  color: #ef4444;
+}
+
+.system-prompt-status {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The footer sits at the panel's edge, so it keeps its own padding instead of
+   the body's. */
+.system-prompt-body > .config-footer {
+  margin: 0 -18px;
+}
+
 /* Project trust dialog (components/ProjectTrustDialog.tsx). It sits above
    Settings (z-index 1000), which opens it too, keeps clear of the notch and
    the home indicator, and only its body scrolls, so a long MCP server list

@@ -33,6 +33,7 @@ import { SkillsConfig } from "./SkillsConfig";
 import { AgentsConfig } from "./AgentsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { McpConfig } from "./McpConfig";
+import { SystemPromptConfig } from "./SystemPromptConfig";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 import { FontSettings } from "./FontSettings";
 
@@ -67,6 +68,7 @@ export function SettingsSectionIcon({ section, size = 16, strokeWidth = 1.8 }: {
   };
 
   if (section === "general") return <svg {...common}><path d="M20 7h-9M14 17H5" /><circle cx="7" cy="7" r="3" /><circle cx="17" cy="17" r="3" /></svg>;
+  if (section === "systemPrompt") return <svg {...common}><rect x="4" y="2.5" width="16" height="19" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></svg>;
   if (section === "models") return <svg {...common}><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3" /></svg>;
   if (section === "skills") return <svg {...common}><path d="m12 2-10 5 10 5 10-5-10-5Z" /><path d="m2 12 10 5 10-5M2 17l10 5 10-5" /></svg>;
   if (section === "agents") return <svg {...common} className="settings-section-icon is-agent"><rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" /></svg>;
@@ -522,6 +524,7 @@ export function SettingsPanel({
   // Which sections need a project is decided once, in lib/settings-navigation.ts.
   const sections: { id: SettingsSection; label: string; requiresProject: boolean }[] = ([
     { id: "general", label: t("settings.general") },
+    { id: "systemPrompt", label: t("settings.systemPrompt") },
     { id: "models", label: t("common.models") },
     { id: "skills", label: t("common.skills") },
     { id: "agents", label: t("common.agents") },
@@ -619,6 +622,8 @@ export function SettingsPanel({
 
         <main className="settings-dialog-main">
           {sectionHost("general", <GeneralSettings sessionId={sessionId} onSessionReloaded={onSessionReloaded} quoteSelectionEnabled={quoteSelectionEnabled} onQuoteSelectionChange={onQuoteSelectionChange} />)}
+          {/* Global files, so no project is needed; `cwd` only reports a project file that would win. */}
+          {sectionHost("systemPrompt", <SystemPromptConfig embedded key={cwd ?? ""} cwd={cwd} sessionId={sessionId} onClose={onClose} onSessionReloaded={onSessionReloaded} />)}
           {sectionHost("models", <ModelsConfig embedded cwd={cwd} onClose={onClose} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
               status and load again in place when trusting from Settings › MCP changes it. */}
