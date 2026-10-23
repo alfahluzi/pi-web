@@ -88,7 +88,7 @@ for arg in "$@"; do
     --yes) ASSUME_YES=1 ;;
     --force) FORCE=1 ;;
     --no-build) BUILD=0 ;;
-    -h|--help) sed -n '1,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) fail "unknown option: $arg" ;;
     *) [ -z "$NEW_ARG" ] || fail "only one destination path is taken"; NEW_ARG="$arg" ;;
   esac
@@ -149,7 +149,7 @@ APP_JSON="$("$PM2" jlist | "$NODE_BIN" -e '
     args: app.pm2_env.args,
   }));
 ' "$APP")"
-"$NODE_BIN" -e 'process.exit(JSON.parse(process.argv[1]).missing ? 0 : 1)' "$APP_JSON" \
+"$NODE_BIN" -e 'process.exit(JSON.parse(process.argv[1]).missing ? 1 : 0)' "$APP_JSON" \
   || fail "no PM2 app named $APP (set PI_WEB_APP to the right name)"
 APP_CWD="$("$NODE_BIN" -e 'console.log(JSON.parse(process.argv[1]).cwd || "")' "$APP_JSON")"
 [ "$(cd "$APP_CWD" 2>/dev/null && pwd -P || printf '%s' "$APP_CWD")" = "$REAL_REPO" ] \
@@ -168,7 +168,10 @@ PLAN="$("$NODE_BIN" "$HELPER" --plan-only --root "$REAL_REPO" --new-path "$NEW")
 PLAN_SUMMARY="$("$NODE_BIN" -e '
   const plan = JSON.parse(process.argv[1]);
   const sessions = plan.sessionCount;
-  console.log(`${sessions} session file(s), ${plan.worktrees} worktree path(s)`);
+  // The list includes the checkout itself; the move repairs the links either way.
+  const checkouts = Math.max(0, plan.worktrees - 1);
+  const extra = checkouts === 0 ? "no linked worktree" : `${checkouts} linked worktree(s)`;
+  console.log(`${sessions} session file(s), ${extra}`);
 ' "$PLAN")"
 
 step "Plan"
