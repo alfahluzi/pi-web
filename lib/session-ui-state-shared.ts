@@ -547,6 +547,102 @@ function capProjectOrder(order: string[], keep: ReadonlySet<string>): string[] {
 }
 
 /**
+ * Pure. A project whose folder moved keeps its place, its pin and its display
+ * name under the new key: `projects`, `projectOrder` and `projectNames` are
+ * re-keyed, and everything else (`sessions`, `revision`) is left alone. A key
+ * the state already holds at the destination wins over the arriving one — the
+ * destination is what the sidebar showed, and two projects must not merge by
+ * accident — while the order keeps the moved key's own position.
+ * Returns a NEW state (never mutates input) and whether anything changed.
+ */
+export function rekeySessionUiProjectKeys(
+  state: SessionUiState,
+  pairs: readonly { from: string; to: string }[],
+): { state: SessionUiState; changed: boolean } {
+  const moves = new Map<string, string>();
+  for (const { from, to } of pairs) {
+    if (from !== to && !moves.has(from)) moves.set(from, to);
+  }
+  if (moves.size === 0) return { state, changed: false };
+  const next = copyState(state);
+  let changed = false;
+
+  for (const [from, to] of moves) {
+    if (!hasOwn(next.projects, from)) continue;
+    const entry = next.projects[from];
+    delete next.projects[from];
+    if (!hasOwn(next.projects, to)) {
+      // `root` is the group's folder (pinned groups keep it through an empty
+      // project), so it follows the move too: a stale root sends "+", "Open in
+      // Files" and the next move to a path that no longer exists.
+      next.projects[to] = { ...entry, root: remapProjectPath(entry.root, moves) };
+    }
+    changed = true;
+  }
+
+  const names = { ...next.projectNames };
+  if (next.projectNames) {
+    for (const [from, to] of moves) {
+      if (!hasOwn(names, from)) continue;
+      const name = names[from];
+      delete names[from];
+      if (!hasOwn(names, to)) names[to] = name;
+      changed = true;
+    }
+    // A longer key costs more bytes, so the re-keyed names are held to the same
+    // budget as any other write: the ones that fit stay, the rest are dropped.
+    const fitted: Record<string, string> = {};
+    let count = 0;
+    let bytes = 1;
+    for (const [key, name] of Object.entries(names)) {
+      const size = nameEntryBytes(key, name);
+      if (!namesFit(count + 1, bytes + size)) continue;
+      fitted[key] = name;
+      count++;
+      bytes += size;
+    }
+    if (count === 0) delete next.projectNames;
+    else next.projectNames = fitted;
+    if (count !== Object.keys(names).length) changed = true;
+  }
+
+  if (next.projectOrder) {
+    const seen = new Set<string>();
+    const order: string[] = [];
+    for (const key of next.projectOrder) {
+      const to = moves.get(key) ?? key;
+      if (seen.has(to)) continue;
+      seen.add(to);
+      order.push(to);
+    }
+    // A destination path is usually longer than the one it replaces, so the
+    // re-keyed order is held to the same limits as any other write.
+    if (writeProjectOrder(next, fitProjectOrder(order))) changed = true;
+  }
+
+  return { state: next, changed };
+}
+
+/**
+ * `path` after the keys it sits at or under moved, or after one of them sits
+ * under it (a project's root is often an ancestor of the keys that moved, such
+ * as a repository root above the folder a session was opened in); any other
+ * path is unchanged. Both separators are accepted: keys come from disk.
+ */
+function remapProjectPath(path: string, moves: ReadonlyMap<string, string>): string {
+  for (const [from, to] of moves) {
+    if (path === from) return to;
+    if (path.startsWith(`${from}/`) || path.startsWith(`${from}\\`)) return `${to}${path.slice(from.length)}`;
+  }
+  for (const [from, to] of moves) {
+    if (!from.startsWith(`${path}/`) && !from.startsWith(`${path}\\`)) continue;
+    const tail = from.slice(path.length);
+    if (to.endsWith(tail)) return to.slice(0, to.length - tail.length);
+  }
+  return path;
+}
+
+/**
  * Pure. Returns a NEW state (never mutates input) and whether anything changed. Does NOT touch revision.
  * The project order never depends on `now`, and its requests are relative
  * (keys added if missing, one key placed next to one anchor), so a replay or

@@ -9,6 +9,7 @@ import {
   applySessionUiStateRequest,
   emptySessionUiState,
   normalizeSessionUiState,
+  rekeySessionUiProjectKeys,
   SESSION_UI_STATE_VERSION,
   type SessionUiState,
   type SessionUiStateRequest,
@@ -255,6 +256,24 @@ export function updateSessionUiState(request: SessionUiStateRequest, path?: stri
     return Promise.reject(error);
   }
   return editState(target, (state) => applySessionUiStateRequest(state, request, Date.now()));
+}
+
+/**
+ * A project's folder moved: its pin, display name and place in the order follow
+ * it to the new key. Under the same lock as every other write, so a rename in
+ * another window lands before or after, never instead.
+ */
+export function rekeySessionUiProjects(
+  pairs: readonly { from: string; to: string }[],
+  path?: string,
+): Promise<SessionUiState> {
+  let target: string;
+  try {
+    target = path ?? getSessionUiStatePath();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return editState(target, (state) => rekeySessionUiProjectKeys(state, pairs));
 }
 
 /** Removes those session entries; no-op (no write) if none present. */

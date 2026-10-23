@@ -179,6 +179,16 @@ export function FolderPlusIcon(props: SidebarIconProps) {
   );
 }
 
+/** A folder with an arrow: the sidebar's "Move project…". */
+export function MoveFolderIcon(props: SidebarIconProps) {
+  return (
+    <SidebarIcon {...props}>
+      <path d="M3 8a2 2 0 0 1 2-2h3.4l1.9 1.9H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+      <path d="M9.5 12.5h5M12.5 10.5l2 2-2 2" />
+    </SidebarIcon>
+  );
+}
+
 export function TerminalIcon(props: SidebarIconProps) {
   return (
     <SidebarIcon {...props}>

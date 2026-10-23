@@ -2657,6 +2657,26 @@ export function hasBusyRpcSessionForCwd(cwd: string): boolean {
   );
 }
 
+/**
+ * The cwds of wrappers that are working right now (or still starting), for
+ * checks that span a whole tree rather than one folder: moving a project moves
+ * every folder under it, so a run in any of them blocks the move.
+ */
+export function getBusyRpcSessionCwds(): string[] {
+  const cwds = new Set<string>(getStartingSessionCwds().keys());
+  for (const session of getRegistry().values()) {
+    if (session.isRunning()) cwds.add(normalizeRpcCwd(session.cwd));
+  }
+  return [...cwds];
+}
+
+/** The cwds of every open wrapper, running or idle: what a moved tree has to shut down first. */
+export function getOpenRpcSessionCwds(): string[] {
+  const cwds = new Set<string>();
+  for (const session of getRegistry().values()) cwds.add(normalizeRpcCwd(session.cwd));
+  return [...cwds];
+}
+
 export async function destroyRpcSessionsForCwd(cwd: string): Promise<number> {
   const targetCwd = normalizeRpcCwd(cwd);
   const sessions = Array.from(getRegistry().values()).filter(

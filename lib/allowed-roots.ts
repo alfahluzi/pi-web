@@ -29,3 +29,12 @@ export function allowFileRoot(root: string): void {
   getAdditionalAllowedRoots().add(normalizedRoot);
   globalThis.__piAllowedRootsCache?.roots.add(normalizedRoot);
 }
+
+/**
+ * The roots are derived from the sessions on disk, so anything that rewrites
+ * session cwds in bulk (a project moved to another folder) drops the cached set
+ * instead of waiting out its TTL.
+ */
+export function invalidateAllowedRootsCache(): void {
+  globalThis.__piAllowedRootsCache = undefined;
+}

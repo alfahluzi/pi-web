@@ -7,6 +7,7 @@ import { SessionSidebar, type SelectSessionOptions, type SessionSidebarControl }
 import { ChatWindow } from "./ChatWindow";
 import { NewSessionContextBar, type NewSessionContextControl } from "./NewSessionContextBar";
 import type { ChatScrollPosition } from "@/lib/chat-scroll-position";
+import { isPathAtOrUnderRoot, remapMovedPath, remapUrlCwd } from "@/lib/moved-path";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState, saveParkedFileViewerState, switchFileWorkspace, type ParkedFileWorkspace } from "./file-tab-state";
@@ -1209,6 +1210,50 @@ export function AppShell() {
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
+  // A project's folder moved (the sidebar's "Move project…"): the sessions'
+  // headers carry their new cwd now, but this window still holds the old paths.
+  // Open file tabs follow the project, a fresh composer's cwd follows it, and a
+  // selected session in it is re-read (its header's cwd is the new one).
+  // Terminal tabs are left alone: their process keeps the folder it started in.
+  const handleProjectMoved = useCallback((oldRoot: string, newRoot: string) => {
+    invalidateWorkspaceRestore();
+    setRefreshKey((k) => k + 1);
+    setFileTabs((tabs) => {
+      let changed = false;
+      const next = tabs.map((tab) => {
+        if (tab.kind) return tab;
+        const moved = remapMovedPath(tab.filePath, oldRoot, newRoot);
+        if (!moved) return tab;
+        changed = true;
+        return { ...tab, id: `file:${moved}`, filePath: moved };
+      });
+      return changed ? next : tabs;
+    });
+    setActiveFileTabId((current) => {
+      if (!current?.startsWith("file:")) return current;
+      const moved = remapMovedPath(current.slice("file:".length), oldRoot, newRoot);
+      return moved ? `file:${moved}` : current;
+    });
+    // A package panel's document is loaded with the workspace it was opened in.
+    setWebPanelTabs((tabs) => {
+      let changed = false;
+      const next = tabs.map((tab) => {
+        const moved = remapUrlCwd(tab.url, oldRoot, newRoot);
+        if (!moved) return tab;
+        changed = true;
+        return { ...tab, url: moved };
+      });
+      return changed ? next : tabs;
+    });
+    setNewSessionCwd((cwd) => (cwd ? remapMovedPath(cwd, oldRoot, newRoot) ?? cwd : cwd));
+    const active = selectedSessionRef.current;
+    if (active?.cwd && isPathAtOrUnderRoot(active.cwd, oldRoot)) {
+      const movedCwd = remapMovedPath(active.cwd, oldRoot, newRoot) ?? active.cwd;
+      setSelectedSession((current) => (current?.id === active.id ? { ...current, cwd: movedCwd } : current));
+      hydrateSelectedSession(active.id);
+    }
+  }, [hydrateSelectedSession, invalidateWorkspaceRestore]);
+
   const handleOpenLinkedFile = useCallback((filePath: string, page?: number) => {
     handleOpenFile(filePath, getFileName(filePath), { sourceSessionId: selectedSession?.id ?? null, page });
   }, [handleOpenFile, selectedSession?.id]);
@@ -1526,6 +1571,7 @@ export function AppShell() {
         onInitialRestoreDone={handleInitialRestoreDone}
         refreshKey={refreshKey}
         onSessionDeleted={handleSessionDeleted}
+        onProjectMoved={handleProjectMoved}
         selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
         onCwdChange={handleCwdChange}
         onOpenFile={handleOpenFile}

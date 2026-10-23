@@ -85,6 +85,7 @@ import { DirectoryPicker } from "./DirectoryPicker";
 import { DismissButton } from "./DismissButton";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { PiWebTitle } from "./PiWebTitle";
+import { ProjectMoveForm, type ProjectMoveOutcome } from "./ProjectMoveForm";
 import { ProjectWorktreePicker, type ProjectWorktreePickerHandle, type WorktreeRemoval } from "./ProjectWorktreePicker";
 import { SessionSearch } from "./SessionSearch";
 import { SessionTree, sessionRowTitle, type SessionTreeReveal } from "./SessionTree";
@@ -101,6 +102,7 @@ import {
   FolderIcon,
   MessageIcon,
   MoreIcon,
+  MoveFolderIcon,
   ForkIcon,
   OpenInNewTabIcon,
   PencilIcon,
@@ -212,6 +214,11 @@ interface Props {
   onInitialRestoreDone?: () => void;
   refreshKey?: number;
   onSessionDeleted?: (sessionId: string) => void;
+  /**
+   * A project's folder moved (the group menu's "Move project…"): open tabs, a
+   * fresh composer's cwd and the selected session still name the old path.
+   */
+  onProjectMoved?: (oldRoot: string, newRoot: string) => void;
   selectedCwd?: string | null;
   onCwdChange?: (
     cwd: string | null,
@@ -290,7 +297,7 @@ type SessionRow = Extract<SidebarRow, { kind: "session" }>;
  */
 type SidebarMenuState =
   | { kind: "row"; row: SessionRow; anchor: SidebarMenuAnchor; opener: HTMLElement | null }
-  | { kind: "group"; project: SidebarProject; olderCount: number; anchor: SidebarMenuAnchor; opener: HTMLElement; askDelete?: boolean }
+  | { kind: "group"; project: SidebarProject; olderCount: number; anchor: SidebarMenuAnchor; opener: HTMLElement; askDelete?: boolean; askMove?: boolean }
   | { kind: "archive-group"; project: SidebarProject; anchor: SidebarMenuAnchor; opener: HTMLElement; askDelete?: boolean }
   | { kind: "archive"; anchor: SidebarMenuAnchor; opener: HTMLElement; askDelete?: ArchiveDeleteScope };
 
@@ -492,7 +499,7 @@ function buttonAnchor(element: HTMLElement, align: "start" | "end"): SidebarMenu
   return { kind: "rect", rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, align };
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, onProjectMoved, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
@@ -658,6 +665,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     apply: applyUiStateRequest,
     snapshot: snapshotUiState,
     noteRevision: noteUiRevision,
+    refresh: refreshUiState,
   } = useSessionUiState();
 
   // The explorer's scroll container is always mounted (empty without a cwd),
@@ -2075,6 +2083,26 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     setMenu((current) => (current?.kind === "group" && current.project.key === projectKey ? { ...current, askDelete } : current));
   }, []);
 
+  // "Move project…" turns the group menu into its form; Cancel goes back.
+  const askProjectMove = useCallback((projectKey: string, askMove: boolean) => {
+    setMenu((current) => (current?.kind === "group" && current.project.key === projectKey ? { ...current, askMove, askDelete: false } : current));
+  }, []);
+
+  // The project is where the user asked for it: its sessions were re-filed
+  // under the new path by the server, so the sidebar reloads the catalogue,
+  // re-reads the re-keyed pins/order, and the app re-points what still names
+  // the old folder. Anything left behind is counted in the toast.
+  const handleProjectMoved = useCallback((outcome: ProjectMoveOutcome) => {
+    setMenu(null);
+    const parts = [t("sidebar.movedProjectToast", { path: outcome.destination })];
+    const unfollowed = outcome.errors.length;
+    if (unfollowed > 0) parts.push(t("sidebar.movedProjectErrors", { count: unfollowed }));
+    showToast(parts.join(" · "));
+    void loadSessions();
+    void refreshUiState();
+    onProjectMoved?.(outcome.source, outcome.destination);
+  }, [loadSessions, onProjectMoved, refreshUiState, showToast, t]);
+
   const deletingRunsRef = useRef(new Set<string>());
   const deleteFamilyIds = useCallback(async (runKey: string, ids: readonly string[], focusTarget: () => HTMLElement | null) => {
     setMenu(null);
@@ -2350,6 +2378,18 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       },
       ...nameItems,
       {
+        // The folder itself moves, with the project's history; Rename… above
+        // only changes the label the sidebar shows.
+        type: "item",
+        id: "move-project",
+        label: t("sidebar.moveProject"),
+        icon: <MoveFolderIcon />,
+        onSelect: ({ keepOpen }) => {
+          keepOpen();
+          askProjectMove(project.key, true);
+        },
+      },
+      {
         type: "item",
         id: "open-in-files",
         label: t("sidebar.openInFilesTab"),
@@ -2471,6 +2511,19 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     });
   };
 
+  // A project's "Move project…": the menu turns into its form (the destination
+  // folder, then Move). Cancel goes back to the list; on a phone the sheet
+  // brings its own. The form clears itself on cancel by unmounting.
+  const projectMoveBody = (project: SidebarProject): ReactNode => (
+    <ProjectMoveForm
+      root={project.root}
+      name={project.name}
+      onMoved={handleProjectMoved}
+      onCancel={() => askProjectMove(project.key, false)}
+      showCancel={!isMobile}
+    />
+  );
+
   const archiveGroupMenuItems = (project: SidebarProject): SidebarMenuItem[] => {
     const ids = archiveDeleteIds({ projectKey: project.key });
     return [
@@ -2582,7 +2635,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     menuTitle = project.name;
     menuLabel = t("sidebar.projectActions", { name: project.name });
     menuItems = groupMenuItems(project, menu.olderCount);
-    if (menu.askDelete) menuBody = projectDeleteBody(project);
+    if (menu.askMove) menuBody = projectMoveBody(project);
+    else if (menu.askDelete) menuBody = projectDeleteBody(project);
     menuWidth = 264;
   } else if (menu?.kind === "archive-group") {
     const project = archiveGroups.find((row) => row.project.key === menu.project.key)?.project ?? menu.project;
@@ -3152,7 +3206,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         title={menuTitle}
         items={menuItems}
         cancelLabel={t("sidebar.cancel")}
-        focusCancel={menuBody !== null}
+        focusCancel={menuBody !== null && !(menu?.kind === "group" && menu.askMove)}
         onClose={closeMenu}
         returnFocusTo={menu?.opener ?? null}
         width={menuWidth}

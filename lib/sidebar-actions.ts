@@ -110,6 +110,26 @@ export function forkFailureMessage(code: string | undefined, error: string): { k
   }
 }
 
+/**
+ * Why POST /api/projects/move refused a move, as a message key and its
+ * parameters (the route's `code`). The cases a person can act on say what to do
+ * next; anything else shows the server's own text, which names the path.
+ */
+export function projectMoveRefusalMessage(code: string | undefined, error: string): { key: string; params?: { error: string } } {
+  switch (code) {
+    case "sessions-running": return { key: "sidebar.moveProjectRunning" };
+    case "destination-exists": return { key: "sidebar.moveProjectDestinationExists" };
+    case "target-inside-source": return { key: "sidebar.moveProjectInsideSource" };
+    case "invalid-target": return { key: "sidebar.moveProjectInvalidTarget" };
+    case "source-protected": return { key: "sidebar.moveProjectProtected" };
+    case "source-symbolic-link": return { key: "sidebar.moveProjectSymlink" };
+    case "target-protected": return { key: "sidebar.moveProjectTargetProtected" };
+    case "cross-device": return { key: "sidebar.moveProjectCrossDevice" };
+    case "permission-denied": return { key: "sidebar.moveProjectPermission" };
+    default: return { key: "sidebar.moveProjectFailed", params: { error } };
+  }
+}
+
 /** Root ids per POST /api/sessions/delete (the route's MAX_SESSION_DELETE_IDS). */
 export const PROJECT_DELETE_IDS_PER_REQUEST = 500;
 
