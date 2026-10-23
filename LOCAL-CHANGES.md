@@ -43,8 +43,8 @@ The file viewer can now edit text files in place instead of only previewing
 them, and a save fans out to every open view.
 
 - New files: `lib/file-edit.ts` (revision token and save-body validation),
-  `lib/file-language.ts` (file name/extension to language id),
-  `lib/code-languages.ts` (lazy CodeMirror language loader), and
+  `lib/code-languages.ts` (lazy CodeMirror language loader; upstream's
+  in-route extension map supplies the id), and
   `components/FileEditor.tsx` (the CodeMirror 6 editor). New tests accompany
   each.
 - New endpoint: `PUT /api/files/[...path]` writes a file atomically while

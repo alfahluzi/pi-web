@@ -87,7 +87,7 @@ test("the line-number gutter is pinned only in views of at most SOURCE_HIGHLIGHT
   // the real gutter styles in place.
   const calculations = file.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "TextFileViewer").body.statements.filter((node) =>
     ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) =>
-      ["isDelimitedTable", "viewerContent", "sourceLines", "language", "isHtml", "isMarkdown", "hasPreview", "effectiveDisplayMode", "useLightweightSource", "lightweightSourceLines", "prismReady", "highlightedSource"].includes(declaration.name.getText(file)),
+      ["isDelimitedTable", "viewerContent", "sourceLines", "language", "isHtml", "isMarkdown", "hasPreview", "canEdit", "effectiveDisplayMode", "useLightweightSource", "lightweightSourceLines", "prismReady", "highlightedSource"].includes(declaration.name.getText(file)),
     ),
   ).map((node) => node.getText(file)).join("\n");
   const { outputText } = ts.transpileModule(`
@@ -136,6 +136,8 @@ test("the line-number gutter is pinned only in views of at most SOURCE_HIGHLIGHT
   // The gutter repeats the code line's height in px, so a code-font change
   // without it puts the numbers off the line boxes they belong to.
   assert.equal(parseFloat(numberStyle.lineHeight), Number((codeStyle.fontSize * codeStyle.lineHeight).toFixed(1)));
+});
+
 test("file viewer state and display labels expose edit mode", async () => {
   const stateSource = await readFile(new URL("../lib/file-viewer-state.ts", import.meta.url), "utf8");
   assert.match(stateSource, /export type FileViewerDisplayMode = "source" \| "preview" \| "diff" \| "edit";/);

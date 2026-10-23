@@ -381,7 +381,6 @@ export const zhCNLocale: LocalePlugin = {
     "sidebar.collapseOtherGroups": "折叠其他项目",
     "sidebar.expandAllGroups": "展开全部项目",
     "sidebar.collapseAllGroups": "折叠全部项目",
-    "sidebar.pinned": "置顶",
     "sidebar.pinnedProject": "已置顶",
     "sidebar.pinProject": "置顶项目",
     "sidebar.unpinProject": "取消置顶项目",

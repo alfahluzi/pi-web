@@ -381,7 +381,6 @@ export const enLocale: LocalePlugin = {
     "sidebar.collapseOtherGroups": "Collapse other projects",
     "sidebar.expandAllGroups": "Expand all projects",
     "sidebar.collapseAllGroups": "Collapse all projects",
-    "sidebar.pinned": "Pinned",
     "sidebar.pinnedProject": "Pinned",
     "sidebar.pinProject": "Pin project",
     "sidebar.unpinProject": "Unpin project",

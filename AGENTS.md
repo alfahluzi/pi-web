@@ -184,8 +184,7 @@ lib/
   mcp-server-display.ts     client-safe display helpers for McpServerInfo (hidden-character escapes, labels)
   mcp-tool-display.ts       server/tool label of an mcp__ call from its result details, never the name
   file-edit.ts              revision token and PUT body validation (size, NUL, stale-base checks)
-  file-language.ts          file name / extension to editor language id
-  code-languages.ts         lazy CodeMirror language loader for the file editor
+  code-languages.ts         lazy CodeMirror language loader for the file editor; the id it receives comes from the in-route language map in `app/api/files/[...path]/route.ts`
   web-panel-manifest.ts     pure `package.json#piWeb` parsing, icon names, package-root containment
   web-panel-bridge.ts       workspace-relative path resolution for panel `open-file`
   web-panels.ts             installed-package panel registry behind /api/web-panels
