@@ -170,31 +170,14 @@ and cannot render into the browser. The panel is trusted at the same level as th
 package's extension code; assets are live-read so a plugin can be edited while
 `npm run dev` runs.
 
-## Pinned sessions in the sidebar
+## Session pins: dropped in favour of upstream
 
-The session list can pin a conversation to the top of the sidebar in its own
-"Pinned" section, above the normal most-recent-activity order. Pinned rows stay
-scoped to the active workspace, so a pin from another project neither shows a row
-nor an empty header. Pin and unpin from the pushpin button that appears on row
-hover; a pinned row also carries a small pushpin next to its title.
-
-- New files: `lib/session-pin-order.ts` (pure normalization and newest-first
-toggle, browser-safe), `lib/session-pins.ts` (reads and writes
-`~/.pi/agent/pi-web-pinned-sessions.json` with a private atomic write),
-`lib/session-list-rows.ts` (pinned-section row model plus the variable-height
-window), and `app/api/sessions/pinned/route.ts` (list and toggle). Tests
-accompany each.
-- Modified: `app/api/sessions/route.ts` now returns `pinnedSessionIds` with the
-list, `components/SessionSidebar.tsx` renders the section and toggles the pin
-optimistically, and the three i18n message files gain `sidebar.pinned`,
-`sidebar.pin`, and `sidebar.unpin`.
-- Why a sidecar file rather than a custom transcript entry: the session `.jsonl`
-is written and rewritten by the Pi TUI, so a pin has to live outside it. The id
-list is pi-web's own preference; a missing or malformed file simply reads as
-nothing pinned.
-- The pinned section header is shorter than a session row, so the virtualized
-list is offset from a prefix-sum table instead of `index * rowHeight`
-(`getVirtualRowIndices`). See the "Pinned sessions" section in `AGENTS.md`.
+This fork used to add its own pinned-sessions sidecar. Upstream v0.11.0 shipped
+session pinning (plus per-project order and archiving) in
+`app/api/sessions/ui-state` and `lib/session-ui-state.ts`, so the rebase deleted
+the fork's `lib/session-pins.ts`, `lib/session-pin-order.ts`,
+`lib/session-list-rows.ts`, `app/api/sessions/pinned/`, and the sidebar patch.
+Pinning works through the upstream sidebar now.
 
 ## Deploy
 

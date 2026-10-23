@@ -96,7 +96,6 @@ app/api/
   push/config/route.ts             GET VAPID public key
   push/subscribe/route.ts          POST register a push subscription
   app-update/route.ts              GET current vs latest published pi-web version
-  sessions/pinned/route.ts         GET list | POST { sessionId, pinned } toggle a session pin
   web-panels/route.ts              GET [cwd] right-panel web panels declared by installed Pi packages
   web-panels/[id]/[[...path]]/route.ts  GET a panel document + its relative assets from the owning package
 
@@ -187,9 +186,6 @@ lib/
   file-edit.ts              revision token and PUT body validation (size, NUL, stale-base checks)
   file-language.ts          file name / extension to editor language id
   code-languages.ts         lazy CodeMirror language loader for the file editor
-  session-pin-order.ts      pure pin list normalization and newest-first toggle (browser-safe)
-  session-pins.ts           read/write ~/.pi/agent/pi-web-pinned-sessions.json
-  session-list-rows.ts      pure pinned-section row model and variable-height windowing
   web-panel-manifest.ts     pure `package.json#piWeb` parsing, icon names, package-root containment
   web-panel-bridge.ts       workspace-relative path resolution for panel `open-file`
   web-panels.ts             installed-package panel registry behind /api/web-panels
@@ -286,12 +282,9 @@ Design decisions and traps live in `docs/agents/`, one note per area. Read every
 - `/` renders entirely on the client, so one script chunk the browser cannot parse is a blank page. Next 16 targets Safari 16.4+; the `browserslist` in `package.json` lowers Safari and iOS to 16.2 so SWC turns class `static {}` blocks into private static fields. That covers Next's client runtime; other node_modules keep their syntax unless listed in `transpilePackages` (mermaid and `@mermaid-js/parser` are, for their lazy diagram chunks). Keep the other browserslist entries at Next's defaults.
 - Never write a RegExp lookbehind (`(?<=`, `(?<!`) in client code: SWC cannot downlevel it and Safari parses it only from 16.4. `lib/markdown.ts` emulates its leading lookbehinds with `replaceNotPrecededBy()`. A lookbehind built at runtime (`new RegExp("(?<=…)")` in `try`) fails only when run; that is how `lib/gfm-autolink-email-loader.cjs` fixes `mdast-util-gfm-autolink-literal`'s email regex. The loader is registered for webpack and Turbopack in `next.config.ts` and fails the build if that regex changes upstream.
 
-### Pinned sessions
-- A pin is a pi-web preference, not pi data. `lib/session-pins.ts` keeps an ordered id list in `~/.pi/agent/pi-web-pinned-sessions.json` (private atomic write) instead of appending a custom entry to the session `.jsonl`, which the TUI also writes and rewrites. A missing, malformed, or unreadable file means "nothing pinned": the sidebar must still paint. `lib/session-pin-order.ts` holds the pure normalization and newest-first toggle so the browser never imports the `node:fs` module.
-- `GET /api/sessions` ships `pinnedSessionIds` alongside the list, so a reload or a second tab converges on the sidecar without a second request; `POST /api/sessions/pinned { sessionId, pinned }` is the only writer. The sidebar toggles optimistically, then adopts the response list and falls back to a full `loadSessions()` when the write fails.
-- The pinned section is drawn from `lib/session-list-rows.ts`, a row model of `pinnedHeader` + families, and it is scoped to the active workspace: `families` is already filtered to the selected project, so a pin from another project adds neither a row nor a header. Only family roots are pin targets — subagent rows have no row of their own, so a pinned child id would strand the family.
-- Because the section header is shorter than a session row, the window is computed from row offsets (`getVirtualRowIndices`) rather than `index * height`. Keep `sessionListRowHeight` as the single source of heights — an absolute row positioned by index would overlap the pinned block. `getSessionListIndices` (fixed height) stays for the sidebar test suite.
-- Deleting a session leaves its id in the sidecar; it simply matches no family, so pins never resurrect a deleted session.
+### Session pins are upstream's session ui-state
+- The fork used to keep its own pin sidecar (`~/.pi/agent/pi-web-pinned-sessions.json`, `lib/session-pins.ts`, `app/api/sessions/pinned`, and a pinned-section row model). Upstream v0.11.0 replaced that with `app/api/sessions/ui-state` + `lib/session-ui-state.ts`, which owns pins, per-project order and archiving in one server-side record, so the fork's copy was deleted instead of reconciled. Do not reintroduce a second pin store: a session row's pin is a `set` action on the session's ui-state.
+- `components/SessionSidebar.tsx` is upstream's tree (`SessionTree.tsx`, `SidebarMenu.tsx`, `session-catalog-helpers.ts`) — the fork no longer patches it, so replace behaviour there through upstream's row model rather than forking the file again.
 
 ### File editing and save-based sync
 - `PUT /api/files/[...path]` saves a text file in place. The guard order matters and must stay: `isApiRequestAllowed` origin check -> JSON content-type (`hasJsonContentType`) -> allowed-root plus realpath containment (`isFilePathAllowed` and `isExistingFilePathAllowed`) -> `lstat` with symlink and non-file refusal -> revision read -> `validateFileEditInput` -> `writeFileAtomicSync`. Writes are **never** authorized through `isFilePathReferencedBySession`; that escape hatch exists so a session can read a file outside the allowed roots, not write it.
