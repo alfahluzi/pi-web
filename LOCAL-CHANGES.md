@@ -1,9 +1,17 @@
 # Local changes to pi-web
 
-This checkout is a fork of `@agegr/pi-web@0.9.3` (git tag `v0.9.3`). It carries
+Last updated: 2026-10-23
+
+This checkout is a fork of `@agegr/pi-web@0.12.2` (git tag `v0.12.2`). It carries
 an opt-in patch so terminal-oriented Pi extensions can render their rich custom
-UI in the browser, plus a generic web-panel mechanism so Pi packages can
-contribute right-panel UIs without touching pi-web's source.
+UI in the browser, in-place file editing, a sudo password prompt for the bash
+tool, and a generic web-panel mechanism so Pi packages can contribute right-panel
+UIs without touching pi-web's source.
+
+Upstream moved a long way since this fork started at `v0.9.3` (pi SDK
+`0.87.1` → `1.2.0`, MCP support, a rewritten sidebar, subagent panels), so the
+fork was rebased release by release; see "Rebase history" below for the tags and
+what upstream took over.
 
 ## Fork & attribution
 
@@ -13,11 +21,17 @@ allows forking, modification, and redistribution provided the copyright notice
 and license text stay in place. This fork lives at
 [`alfahluzi/pi-web`](https://github.com/alfahluzi/pi-web).
 
-- `origin` → `git@github.com:alfahluzi/pi-web.git` (this fork, `custom` branch).
+- `origin` → `git@github.com:alfahluzi/pi-web.git` (this fork).
 - `upstream` → `https://github.com/agegr/pi-web.git`.
-- `main` mirrors upstream releases: `git fetch upstream && git rebase upstream/main`.
-- `custom` carries the patches below, based on upstream tag `v0.9.3`.
-- Upstream release tags are annotated, so resolve a commit with `v0.9.3^{}`.
+- `custom` is the **deploy** branch: it is what `pm2 pi-web-custom` serves, and it
+  is only moved once a rebase has been verified.
+- `custom-next` is where a rebase is built and checked. It lives in a separate
+  worktree (`../pi-web-upstream`) with its own `node_modules`, so a running
+  pi-web session is never disturbed.
+- `custom` carries the patches below, based on upstream tag `v0.12.2`.
+- Upstream release tags are annotated, so resolve a commit with `v0.12.2^{}`.
+- Verified hop tags: `fork-next-v0.10.0`, `fork-next-v0.11.1`,
+  `fork-next-v0.12.2`; `fork-deploy-0.9.3` marks the last pre-rebase deploy.
 
 ## What changed
 
@@ -179,6 +193,53 @@ the fork's `lib/session-pins.ts`, `lib/session-pin-order.ts`,
 `lib/session-list-rows.ts`, `app/api/sessions/pinned/`, and the sidebar patch.
 Pinning works through the upstream sidebar now.
 
+## Sudo password prompts in the bash tool
+
+Pi runs tool commands without a terminal, so `sudo` cannot prompt. When a command
+invokes `sudo`, the wrapper asks the operator in the browser (a secret input on
+the existing extension-UI channel) and hands the answer to an askpass helper, so
+the password never appears in the command text, argv, the child environment, the
+tool result, the transcript or a log. Declining, cancelling or timing out simply
+runs the command without a password, exactly as before the feature.
+
+- New files: `lib/sudo-prompt.ts` (askpass helper files, `mkdtemp` lifecycle, the
+  per-wrapper password cache and its TTL), `docs/adr/0007-sudo-password-prompt.md`.
+- Modified: `lib/project-command-env.ts` (the `sudo()` shell prefix with
+  `command sudo -A`, failure detection), `lib/rpc-manager.ts`
+  (`requestSudoPassword`, `extension_ui_input` handling), `lib/pi-types.ts`
+  (`SecretInputRequest`), and the i18n `chat.extensionSecretNote` key.
+- sudo-rs (Ubuntu 26.04) ignores `SUDO_ASKPASS` without `-A`; the prefix passes
+  it. `/usr/bin/sudo`, `xargs sudo`, `sh -c 'sudo …'` and `eval` are not covered,
+  because `commandNeedsSudo()` is a scan and not a parser.
+
+## Rebase history
+
+Upstream releases were replayed in order, one hop per tag, with `tsc --noEmit`,
+`npm test` and `npm run lint` green before the next hop started:
+
+| Hop | Base tag | pi SDK | Notes |
+| --- | --- | --- | --- |
+| 1 | `v0.10.0` | 0.87.1 → 1.0.0 | Extension custom UI became a queue; the questionnaire clears its id from it. |
+| 2 | `v0.11.0` → `v0.11.1` | 1.1.0 | Sidebar rewritten (`SessionTree`/`SidebarMenu`) and upstream gained session pins, so the fork's pin sidecar was deleted. `plugin` tabs learned to coexist with `agent` tabs. |
+| 3 | `v0.12.0` → `v0.12.1` → `v0.12.2` | 1.1.0 → 1.2.0 | Upstream's right-panel layout and subagent viewer adopted; upstream's in-route language map replaced `lib/file-language.ts`; MCP/codemode came along. |
+
+Three commits on top of the replay are fixes the rebase itself needed: the
+questionnaire queue fix, the pin-sidecar removal, and the plugin-tab panel state.
+
+**What upstream took over, and what the fork therefore dropped:**
+
+- Session pins → `app/api/sessions/ui-state` + `lib/session-ui-state.ts`
+  (also per-project order and archiving).
+- File language ids → the map inside `app/api/files/[...path]/route.ts`;
+  `lib/code-languages.ts` still feeds CodeMirror and now accepts `tsx`, `jsx`
+  and `markup`.
+- File tree visibility, worktrees, MCP, subagent panels, the sidebar: pure
+  upstream now, no fork patches.
+
+**What the fork still owns:** `PI_WEB_EXTENSION_MODE` and the absent
+`onTerminalInput`, percentage overlay widths, `PUT /api/files` editing, the
+native questionnaire panel, the sudo prompt, and the web-panel mechanism.
+
 ## Deploy
 
 `./deploy-to-pi-web.sh` promotes this build to the globally installed `pi-web`
@@ -188,5 +249,23 @@ is the single source of truth: the original npm install, its
 `@agegr/pi-web.npm-backup` copy, and the former `pi-web` app on port 4200 were
 all removed on 2026-10-01. Revert instructions are at the top of the script.
 
-Restarting pi-web ends any running agent session, so run it when you are not in
-the middle of a conversation.
+### Promoting a verified `custom-next` to `custom`
+
+Restarting pi-web ends any running agent session (including the one you are
+typing in), so do this when the chat is idle.
+
+1. `git -C /home/ljosalfar-server/Documents/pi-web status` is clean and says
+   `## custom`.
+2. `git -C /home/ljosalfar-server/Documents/pi-web merge --ff-only custom-next`
+   — the rebase branch already sits on upstream `v0.12.2`, so this is the whole
+   merge.
+3. `cd /home/ljosalfar-server/Documents/pi-web && npm install` (pi 1.2.0 plus the
+   fork's codemirror packages), then `npm run build` (never during `npm run dev`).
+4. `pm2 restart pi-web-custom` (or `./deploy-to-pi-web.sh`, which also restarts
+   and saves the process list).
+5. Rollback: `git reset --hard fork-deploy-0.9.3 && npm install && npm run build
+   && pm2 restart pi-web-custom`, or check out the hop tag you last trusted.
+
+Keep the worktree (`../pi-web-upstream`) as the place for the next rebase; it can
+be removed with `git worktree remove ../pi-web-upstream` once `custom-next` lives
+in the main checkout.
