@@ -207,7 +207,7 @@ test("renders write tool content as readable file text", () => {
   }
 });
 
-test("keeps the input JSON for a write with another argument, an empty file or streamed input", () => {
+test("keeps a write's arguments for another argument, an empty file or streamed input", () => {
   const cases = [
     { id: "call-write-mode", input: { path: "notes.md", content: "text", mode: "append" } },
     { id: "call-write-empty", input: { path: "empty.txt", content: "" } },
@@ -219,7 +219,14 @@ test("keeps the input JSON for a write with another argument, an empty file or s
     setToolCallExpanded(id, true);
     try {
       const html = renderMessage({ role: "assistant", provider: "anthropic", model: "claude-test", content: [block] });
-      assert.equal(textOf(html).includes(getToolCallInputText(block)), true, id);
+      const text = textOf(html);
+      if (rawInput === undefined) {
+        // The args keep a tree of their own instead of the written-file text.
+        for (const piece of Object.keys(input)) assert.equal(text.includes(piece), true, `${id} ${piece}`);
+        for (const value of Object.values(input)) assert.equal(text.includes(value), true, `${id} ${value}`);
+      } else {
+        assert.equal(text.includes(getToolCallInputText(block)), true, id);
+      }
     } finally {
       clearExpandedToolCalls();
     }
@@ -718,7 +725,7 @@ test("keeps the generic view for a codemode call whose input is still streaming 
   const other = { type: "toolCall", toolCallId: "call-codemode-other", toolName: "codemode", input: { script: "x" } };
   setToolCallExpanded(other.toolCallId, true);
   t.after(() => setToolCallExpanded(other.toolCallId, false));
-  assert.match(textOf(renderCodemode(other)), /"script": "x"/);
+  assert.match(textOf(renderCodemode(other)), /script: "x"/);
 });
 
 test("labels an MCP call server/tool and indents a JSON result", (t) => {

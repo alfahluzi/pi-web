@@ -6,7 +6,9 @@ import { basename, dirname, join } from "path";
 import { promisify } from "util";
 import { fileURLToPath, pathToFileURL } from "url";
 import { NextResponse } from "next/server";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { resolveSessionPath } from "@/lib/session-reader";
+import { formatSelectedSystemPrompt, readSelectedSystemPrompt } from "@/lib/system-prompt-library";
 
 const execFileAsync = promisify(execFile);
 
@@ -214,6 +216,38 @@ function patchExportHtml(html: string): string {
   return html;
 }
 
+/**
+ * Add the session's selected system prompt to the exported history.
+ *
+ * pi's exporter writes the session file into the page as base64 JSON and
+ * renders a "System Prompt" block when that JSON carries a `systemPrompt`. The
+ * file-only export never has one: it exports the session's entries, and the
+ * system prompt a session runs with is not an entry. The
+ * `pi-system-prompt-manager` extension keeps its choice in its own state file,
+ * so the exported history would never name the prompt the session ran with.
+ *
+ * The block is the exporter's own: the same `systemPrompt` key, so the page
+ * renders it with pi's markup (a ten-line preview that expands). A malformed
+ * payload leaves the export exactly as it was.
+ */
+function patchSessionSystemPrompt(html: string, sessionId: string): string {
+  const selected = readSelectedSystemPrompt(getAgentDir(), sessionId);
+  if (!selected) return html;
+
+  const match = /(<script id="session-data"[^>]*>)([\s\S]*?)(<\/script>)/.exec(html);
+  if (!match) return html;
+
+  try {
+    const data = JSON.parse(Buffer.from(match[2], "base64").toString("utf8")) as Record<string, unknown>;
+    if (typeof data.systemPrompt === "string" && data.systemPrompt) return html;
+    data.systemPrompt = formatSelectedSystemPrompt(selected);
+    const encoded = Buffer.from(JSON.stringify(data), "utf8").toString("base64");
+    return html.slice(0, match.index) + match[1] + encoded + match[3] + html.slice(match.index + match[0].length);
+  } catch {
+    return html;
+  }
+}
+
 async function exportSession(filePath: string, outputPath: string): Promise<void> {
   const cliPath = await getPiCliPath();
   if (cliPath) {
@@ -262,7 +296,7 @@ export async function GET(
       await exportSession(filePath, outputPath);
 
       const html = readFileSync(outputPath, "utf8");
-      const patchedHtml = patchExportHtml(html);
+      const patchedHtml = patchSessionSystemPrompt(patchExportHtml(html), id);
       return new Response(patchedHtml, {
         headers: {
           "Content-Type": "text/html; charset=utf-8",

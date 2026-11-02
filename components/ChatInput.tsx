@@ -33,8 +33,10 @@ import { useI18n } from "@/hooks/useI18n";
 import { useChatAppearance } from "@/hooks/useChatAppearance";
 import { useFontPreferences } from "@/hooks/useFontPreferences";
 import type { ToolPreset } from "@/lib/tool-presets";
+import type { SystemPromptsResponse } from "@/lib/api-types";
 import { SelectorRow } from "./SelectorRow";
 import { ModelSelector, type ModelSelectorOption } from "./ModelSelector";
+import { SystemPromptSelector } from "./SystemPromptSelector";
 
 export { filterModelOptions } from "./ModelSelector";
 
@@ -66,6 +68,17 @@ interface Props {
   defaultModel?: { provider: string; modelId: string } | null;
   /** Saves a model as the default for new sessions and selects it here. */
   onSetDefaultModel?: (provider: string, modelId: string) => void;
+  /**
+   * The `pi-system-prompt-manager` library and this session's choice. Absent (or
+   * an empty library) hides the picker: there is nothing to pick and nothing to
+   * switch off.
+   */
+  systemPrompts?: SystemPromptsResponse | null;
+  /** Sets the session's prompt by name (`null`: `/sysprompt off`). */
+  onSystemPromptChange?: (name: string | null) => void;
+  systemPromptSwitching?: boolean;
+  /** A session already exists, so its prompt is settled; the picker shows the choice but cannot change it. */
+  systemPromptLocked?: boolean;
   onCompact?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
@@ -651,6 +664,7 @@ export function ModelScopeWarningBanner({ warnings }: { warnings?: string[] }) {
 export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings, onModelChange, modelSwitching,
   defaultModel, onSetDefaultModel,
+  systemPrompts, onSystemPromptChange, systemPromptSwitching, systemPromptLocked = false,
   onCompact, onAbortCompaction, isCompacting, compactError, onDismissCompactError, compactResult, toolPreset, onToolPresetChange,
   thinkingLevel, isAutoThinkingSelection = false, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   savedDefaultThinkingLevel, onSetDefaultThinkingLevel,
@@ -1701,8 +1715,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (!isMobile) setControlsMenuOpen(false);
   }, [isMobile]);
 
-
-
   return (
     <fieldset
       disabled={builtinCommandPending}
@@ -2449,6 +2461,19 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
                 isAutoSelection={isAutoModelSelection}
                 defaultValue={defaultModel}
                 onSetDefault={onSetDefaultModel}
+              />
+            )}
+            {/* The session's extension-provided system prompt, right of the model. Phones keep
+                the icon only: the bar's left row has no room for a second name. */}
+            {onSystemPromptChange && systemPrompts && systemPrompts.prompts.length > 0 && (
+              <SystemPromptSelector
+                prompts={systemPrompts.prompts}
+                active={systemPrompts.active}
+                enabled={systemPrompts.enabled}
+                onChange={onSystemPromptChange}
+                busy={systemPromptSwitching}
+                locked={systemPromptLocked}
+                showLabel={!isMobile}
               />
             )}
           </div>

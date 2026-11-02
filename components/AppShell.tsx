@@ -1983,7 +1983,13 @@ export function AppShell() {
   };
 
   const renderSessionStatsButton = (mobile: boolean) => {
-    if (!mobile && (!showChat || (!sessionStats && !contextUsage))) return null;
+    if (!mobile && (!showChat || (!sessionStats && !contextUsage))) {
+      // Nothing to count yet (a fresh composer, or a session whose usage has not
+      // arrived). This button is the desktop bar's only right-aligner — its
+      // `marginLeft: auto` — so without it the file and panel toggles after it
+      // would slide left to sit beside "Tools". Keep the gap.
+      return <div aria-hidden="true" style={{ flex: 1, minWidth: 0 }} />;
+    }
 
     const tokens = sessionStats?.tokens;
     const cost = sessionStats?.cost ?? 0;
