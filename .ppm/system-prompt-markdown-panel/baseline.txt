@@ -1,0 +1,42 @@
+## status
+ M .ppm/system-prompt-markdown-panel/tasks/phase_0.json
+?? .ppm/system-prompt-markdown-panel/baseline.txt
+
+## diffstat
+ .ppm/system-prompt-markdown-panel/tasks/phase_0.json | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+## perfile
+added=1 .ppm/system-prompt-markdown-panel/tasks/phase_0.json
+
+## tests
+exit=1
+ℹ pass 2930
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 89838.960646
+
+✖ failing tests:
+
+test at lib/web-auth.test.mjs:12:1
+✖ enables password authentication only for a non-empty configured password (72.102166ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== false
+  
+      at TestContext.<anonymous> (file:///home/ljosalfar-server/Documents/harness-app/pi-web/lib/web-auth.test.mjs:14:10)
+      at async Test.run (node:internal/test_runner/test:1404:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+## checks
+tsc=0
+eslint-scoped=0

@@ -53,7 +53,6 @@ import {
   createStreamingStore,
   type ClientAssistantMessageEvent,
 } from "@/lib/streaming-message";
-import type { SystemPromptsResponse } from "@/lib/api-types";
 
 export interface SessionData {
   sessionId: string;
@@ -404,10 +403,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
   const [slashCommandsLoading, setSlashCommandsLoading] = useState(false);
-  // The `pi-system-prompt-manager` library and this session's choice; null until
-  // the first read answers, and left null when nothing can be picked.
-  const [systemPrompts, setSystemPrompts] = useState<SystemPromptsResponse | null>(null);
-  const [systemPromptSwitching, setSystemPromptSwitching] = useState(false);
   const [noticeState, dispatchNotice] = useReducer(noticeReducer, { visible: [], pending: [] });
   const [sessionStatsOverride, setSessionStatsOverride] = useState<SessionStatsInfo | null>(null);
   const [extensionDialogs, setExtensionDialogs] = useState<ExtensionUiDialogRequest[]>([]);
@@ -2474,46 +2469,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [cancelEventStreamGrace, clearSlashCommands, closeEvents, loadTools, maintainEventsConnected, setToolPresetState, syncLiveModel]);
 
-  // The composer's system-prompt picker reads the `pi-system-prompt-manager`
-  // library and this session's choice. Best effort: an extension that is not
-  // installed (no library file) answers with no prompts, which keeps the picker
-  // hidden instead of failing anything.
-  const loadSystemPrompts = useCallback(async (signal?: AbortSignal) => {
-    const sid = sessionIdRef.current;
-    const url = sid ? `/api/system-prompts?sessionId=${encodeURIComponent(sid)}` : "/api/system-prompts";
-    try {
-      const res = await fetch(url, signal ? { signal } : undefined);
-      if (!res.ok || signal?.aborted) return;
-      const body = await res.json() as SystemPromptsResponse;
-      if (signal?.aborted) return;
-      setSystemPrompts(body);
-    } catch {
-      // An unreachable route hides the picker, never the composer.
-    }
-  }, []);
-
-  // Picking sends the extension's own command, so its footer status, its notify
-  // and the state it applies at the next turn all follow — and pi-web writes
-  // none of its files. A fresh composer has no session to command yet: ensure
-  // one (as pinning tools does), so the choice becomes the session's own entry
-  // rather than the shared `default`.
-  const handleSystemPromptChange = useCallback(async (name: string | null) => {
-    setSystemPromptSwitching(true);
-    try {
-      const sid = sessionIdRef.current ?? await ensureNewSession();
-      if (!sid) return;
-      await sendAgentCommand(sid, { type: "prompt", message: name ? `/sysprompt ${name}` : "/sysprompt off" });
-      await loadSystemPrompts();
-    } catch (e) {
-      addNotice({
-        type: "error",
-        message: `Failed to switch system prompt: ${e instanceof Error ? e.message : String(e)}`,
-      });
-    } finally {
-      setSystemPromptSwitching(false);
-    }
-  }, [addNotice, ensureNewSession, loadSystemPrompts]);
-
   const scrollToMessage = useCallback((element: HTMLElement, viewportOffset = 16) => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -2765,16 +2720,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     return () => controller.abort();
   }, [loadModels, modelsRefreshKey]);
 
-  // Follow the session and the extension's own status line (`sysprompt: <name>` /
-  // `sysprompt: off`): a command — this picker's or a typed `/sysprompt` — moves
-  // it, and a session switch picks up that session's entry.
-  const syspromptStatus = extensionStatuses.find((status) => status.key === "sysprompt")?.text ?? null;
-  useEffect(() => {
-    const controller = new AbortController();
-    void loadSystemPrompts(controller.signal);
-    return () => controller.abort();
-  }, [loadSystemPrompts, session?.id, newSessionCwd, isNew, syspromptStatus]);
-
   useEffect(() => {
     if (!compactResult) return;
     const t = setTimeout(() => setCompactResult(null), 6000);
@@ -2847,7 +2792,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, sessionStats, autoCompactionEnabled,
     slashCommands, slashCommandsLoading, queuedMessages,
-    systemPrompts, systemPromptSwitching,
     notices: noticeState.visible, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, sendQuestionnaireResponse,
     isAutoModelSelection: isNew && newSessionModel === null,
     isAutoThinkingSelection: isNew && newSessionThinkingLevel === null,
@@ -2873,7 +2817,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     addNotice,
     setNoticePaused: setPausedNoticeId,
     handleToolPresetChange, handleThinkingLevelChange, handleSetDefaultModel, handleSetDefaultThinkingLevel, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages, loadContext,
-    handleSystemPromptChange, loadSystemPrompts,
     scrollToBottom, scrollUserMsgToTop, scrollToMessage,
     dispatch, setAgentRunning, setForkingEntryId,
     bashRunning, pendingBash,

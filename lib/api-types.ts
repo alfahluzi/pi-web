@@ -926,26 +926,3 @@ export interface WebPanelsResponse {
   panels: WebPanelInfo[];
   diagnostics: WebPanelDiagnostic[];
 }
-
-/** One entry of `pi-system-prompt-manager`'s library (`~/.pi/agent/system-prompts.json`). */
-export interface SystemPromptInfo {
-  name: string;
-  description: string | null;
-  /** Where the text goes relative to pi's prompt, as the extension reads it. */
-  mode: "append" | "prepend" | "replace";
-  /** `<provider>/<id>` or a bare model id; null when the prompt is not model-scoped. */
-  models: string[] | null;
-}
-
-/**
- * The prompt library and the state one session uses, read from the extension's
- * own files. pi-web never writes them: a pick sends `/sysprompt <name>`.
- */
-export interface SystemPromptsResponse {
-  prompts: SystemPromptInfo[];
-  enabled: boolean;
-  /** The name the session has active, whether or not it is enabled, or null. */
-  active: string | null;
-  /** True when `active` comes from this session's own entry rather than the global `default`. */
-  sessionScoped: boolean;
-}

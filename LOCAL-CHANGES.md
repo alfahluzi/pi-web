@@ -212,51 +212,6 @@ runs the command without a password, exactly as before the feature.
   it. `/usr/bin/sudo`, `xargs sudo`, `sh -c 'sudo …'` and `eval` are not covered,
   because `commandNeedsSudo()` is a scan and not a parser.
 
-## System prompt picker for `pi-system-prompt-manager`
-
-The composer has a system-prompt picker right after the model picker, listing
-whatever the `pi-system-prompt-manager` extension
-(`git:github.com/tombystrican/pi-system-prompt-manager`) keeps in
-`~/.pi/agent/system-prompts.json`. PI Web reads that library and the state the
-session uses, and picking one sends the extension's **own** `/sysprompt <name>`
-command to the session (Off sends `/sysprompt off`) — so the extension stays the
-single writer of `system-prompt-state.json`, its footer status and notify follow,
-and the prompt is applied at the next `before_agent_start` exactly as in the TUI.
-PI Web writes none of the extension's files, so no lock is shared or needed.
-
-- New files: `lib/system-prompt-library.ts` (reads the library and the
-  per-session `{ enabled, active }`, mirroring the extension's own fallbacks,
-  including the pre-per-session flat state file), `app/api/system-prompts`
-  (`GET ?sessionId=`, read-only), `components/SystemPromptSelector.tsx`.
-- Modified: `components/ChatInput.tsx` (the picker sits in the left control
-  group after `ModelSelector`), `hooks/useAgentSession.ts`
-  (`loadSystemPrompts`, `handleSystemPromptChange`), `components/ChatWindow.tsx`,
-  `lib/api-types.ts`, the i18n `chat.systemPrompt*` keys.
-- Nothing to pick means no button: an absent or empty library (extension not
-  installed) renders nothing. On phones the button keeps the icon and drops the
-  name, like the other composer controls.
-- **The picker is for starting a chat.** While the composer is a new session it
-  is live; once a session exists it turns locked (dimmed, `aria-disabled`, a
-  title saying why) and only displays the choice that session already has. A
-  prompt picked mid-conversation would silently change the prompt of an ongoing
-  thread, so changing it there stays with the extension's own `/sysprompt`.
-  A fresh composer has no session id yet, so a pick first ensures one (as the
-  tool preset does) — the choice lands in that session's own entry rather than
-  the shared `default`. The picker re-reads when the session changes and when the
-  extension's own `sysprompt:` status line moves, which covers a typed
-  `/sysprompt` too.
-- `GET /api/system-prompts` is read-only on purpose: the session id is only a
-  lookup key (own-property lookups, so `__proto__` falls back to the default),
-  never a path.
-- **The exported history names the prompt.** "Full history" exports the session
-  through pi's HTML exporter, whose file-only path never carries a system prompt
-  (the prompt a session runs with is not a session entry), and the extension
-  keeps its choice in its own state file — so the export could not say which
-  prompt the session ran with. The export route now writes that choice into the
-  exporter's own session data, and the page renders it with pi's markup: the
-  prompt's name, its description, how it joins pi's own prompt (`append`,
-  `prepend`, `replace`) and its text.
-
 ## Rebase history
 
 Upstream releases were replayed in order, one hop per tag, with `tsc --noEmit`,
