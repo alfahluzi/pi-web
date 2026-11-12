@@ -31,6 +31,7 @@ import { carryMessageKeys, messageRenderKeys } from "@/lib/message-keys";
 import { AgentEventConnection } from "@/lib/agent-event-connection";
 import { isNestedToolExecutionEvent, isSystemMessageEvent } from "@/lib/agent-event-wire";
 import { getToolExecutionProgress } from "@/lib/tool-execution-progress";
+import { getToolTiming, type ToolTiming } from "@/lib/tool-timing";
 import { CODEMODE_TOOL_NAME, getCodemodeProgress } from "@/lib/codemode-view";
 import { updateExtensionWidgets } from "@/lib/extension-widgets";
 import { bareMcpOpensSettings } from "@/lib/mcp-command";
@@ -142,7 +143,7 @@ type NoticeAction =
 export type AgentPhase =
   | { kind: "waiting_model" }
   | { kind: "running_command" }
-  | { kind: "running_tools"; tools: { id: string; name: string; progress?: string }[] }
+  | { kind: "running_tools"; tools: { id: string; name: string; progress?: string; startedAt: number; timing?: ToolTiming }[] }
   | null;
 
 export interface CompactResultInfo {
@@ -1638,9 +1639,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (isNestedToolExecutionEvent(event)) break;
         const id = event.toolCallId as string;
         const name = event.toolName as string;
+        const timing = getToolTiming(name, event.args) ?? undefined;
         setAgentPhase((prev) => {
           const tools = prev?.kind === "running_tools" ? [...prev.tools] : [];
-          if (!tools.some((t) => t.id === id)) tools.push({ id, name });
+          if (!tools.some((t) => t.id === id)) tools.push({ id, name, startedAt: Date.now(), timing });
           return { kind: "running_tools", tools };
         });
         break;
@@ -1676,6 +1678,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             id,
             name: name || existing?.name || "tool",
             progress: progress ?? existing?.progress,
+            startedAt: existing?.startedAt ?? Date.now(),
+            timing: existing?.timing,
           };
           return {
             kind: "running_tools",
