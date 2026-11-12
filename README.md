@@ -1,24 +1,107 @@
-# Pi Web
+# Pi Web (alfahluzi fork)
+
+This repository, [alfahluzi/pi-web](https://github.com/alfahluzi/pi-web), is an unofficial fork of [agegr/pi-web](https://github.com/agegr/pi-web). It includes upstream Pi Web plus the custom features below. The current fork includes upstream v0.15.0 and subsequent fixes through [`b96b28b`](https://github.com/agegr/pi-web/commit/b96b28b).
+
+Upstream retains credit for Pi Web and its core features. The original [MIT license](./LICENSE) remains unchanged.
 
 [中文文档](./docs/README.zh-CN.md) | [日本語](./docs/README.ja.md) | [Русский](./docs/README.ru.md)
 
 Local browser UI for the [pi coding agent](https://github.com/earendil-works/pi). Pi Web uses the same local configuration and session files as pi, so you can browse and resume conversations, run agent turns, configure models and resources, and inspect project files from a browser.
 
-**[Try the interactive demo →](https://agegr.github.io/pi-web/)** The real Pi Web UI runs entirely in your browser, with sample sessions, files and models. There is nothing to install; replies are pre-written and no model is called.
+**[Try the upstream interactive demo](https://agegr.github.io/pi-web/)** The upstream Pi Web UI runs entirely in your browser, with sample sessions, files and models. There is nothing to install; replies are pre-written and no model is called. The demo and screenshot below do not showcase this fork's custom features.
 
 ![Pi Web displaying a pi session with structured Markdown, tool calls, and project navigation](https://raw.githubusercontent.com/agegr/pi-web/main/docs/screenshot2.png)
 
-## Features
+## Custom Features
+
+These additions are present in this fork, compared with upstream `agegr/pi-web` at `b96b28b`. The inventory follows the fork's commit history and current source, rather than counting features that were later removed or adopted upstream.
+
+### In-place file editing
+
+Edit text files in the file viewer with a CodeMirror editor and save with `Ctrl/Cmd+S`. Atomic saves preserve permission bits and CRLF line endings. Revision checks reject stale saves; external changes refresh clean buffers but leave unsaved drafts intact with a conflict notice. Drafts survive tab switches, and closing a dirty tab asks for confirmation. Writes stay within the file API's allowed roots and refuse symlinks.
+
+See [the file-editing design](./docs/adr/0006-file-editor-save-sync.md) and [File API](#file-api).
+
+### Native questionnaires
+
+Compatible `ask_user_question` extension dialogs render as browser forms instead of ANSI terminal panels. They support question tabs, option previews, multiple selections, custom answers, notes, review, submit, and cancel. Pending questionnaires can be replayed after a page refresh. Unsupported dialogs retain the existing custom-UI fallback.
+
+For terminal-oriented extensions such as `@juicesharp/rpiv-ask-user-question`, set `PI_WEB_EXTENSION_MODE=tui` so the extension can request its full custom UI.
+
+### Extension run-mode compatibility
+
+`PI_WEB_EXTENSION_MODE` controls the mode advertised to extensions as `ctx.mode`: `rpc` (default), `tui`, `json`, or `print`. The fork also omits the unsupported raw-terminal `onTerminalInput` hook and converts percentage overlay widths into terminal columns for browser-rendered custom UI.
+
+### Browser sudo password prompt
+
+The bash tool can ask for a sudo password through a masked browser input. It passes the answer through a short-lived askpass helper, caches it per session wrapper for five minutes, and clears the cache after an authentication failure. Canceling or declining runs the command without a supplied password.
+
+The helper keeps the password out of command text, arguments, and the child environment. It briefly stores the password in a permission-restricted file, readable by processes running as the same OS user until consumed or cleaned up. Detection is a command scan, not a shell parser: absolute-path sudo and indirect invocations are not covered. See [the sudo prompt design and limitations](./docs/adr/0007-sudo-password-prompt.md).
+
+### Package-provided web panels
+
+Installed Pi packages can declare right-panel UIs through `package.json#piWeb.panels`, without patching Pi Web. Panels have top-bar buttons, tabs, custom icons, workspace/session/theme context, and bridge messages for opening files, inserting composer text, and changing tab titles. Project-scoped panels require project trust; disabled packages are hidden.
+
+Panels run with the same trust level as the installed package's Node extension, not as isolated untrusted web content. See [the panel contract](./docs/web-panels.md) and [runnable example](./examples/web-panel-plugin). The [Project Plan Manager](https://github.com/alfahluzi/project-plan-manager) panel uses this mechanism; it is a separate plugin, not a built-in feature.
+
+### Move projects with their session history
+
+The sidebar's **Move project…** action previews a move before a second confirmation. It relocates the folder, rewrites session paths and parent-session links, updates sidebar project state and trust records, and repairs Git worktree paths. Protection failures explain why a move was refused.
+
+For folders moved outside Pi Web, `scripts/repair-session-paths.mjs` repairs the associated history and supports `--dry-run`. `scripts/move-pi-web.sh` handles moving the Pi Web checkout itself while the server is stopped. These tools change filesystem and session data; read [the operational notes](./LOCAL-CHANGES.md#moving-the-checkout-to-another-folder) before using them.
+
+### System prompt editing and display
+
+**Settings > System prompt** edits the agent directory's `SYSTEM.md` and `APPEND_SYSTEM.md`, with separate drafts, revision-guarded saves, project-override notices, and reset controls. Saving attempts to reload the open session so it picks up the change, and reports when the saved change could not be applied.
+
+The system prompt viewer renders Markdown in labeled sections, including nested XML-style sections, with expand/collapse and raw-prompt copy controls. The earlier composer prompt-library picker was removed and is not part of this fork's current feature set.
+
+### Collapsible JSON tool arguments
+
+Tool cards can render nested JSON arguments as expandable objects and arrays when no specialized view owns the input. Large or deeply nested payloads fall back to text rather than rendering an unbounded tree.
+
+### Running-tool timing hints
+
+The running-tool status shows elapsed seconds against an explicit `timeout` argument. Bash commands containing literal `sleep` calls also show an estimated remaining sleep time. This is a heuristic that sums matching sleep durations as though they run sequentially, not a shell execution trace or completion guarantee.
+
+### Fork-specific operations
+
+- `PI_WEB_ALLOWED_HOSTS` also feeds Next.js development-origin allowances for tunnel and reverse-proxy hosts.
+- `deploy-to-pi-web.sh` targets this maintainer's `pi-web-custom` PM2 setup. It is deployment-specific, not a general installation command.
+
+Session pinning, archiving, side chats, MCP, and the standard sidebar are upstream features, not separate fork implementations. See [LOCAL-CHANGES.md](./LOCAL-CHANGES.md) for historical details; some version and deployment paths there describe earlier revisions.
+
+## Upstream Features
 
 - **Session workspace**: browse, resume, rename, export, and delete conversations grouped by project, with running state, context usage, cost, and compaction details.
 - **Two ways to branch**: **New session** creates an independent session file from an earlier message; **Edit from here** creates a branch inside the current session.
 - **Project file tools**: browse and upload files, inspect Git diffs, and preview source, Markdown, images, audio, PDFs, and DOCX files with automatic refresh.
-- **In-place file editing**: open a text file in the viewer, switch to **Edit**, and save with `Ctrl/Cmd+S`. Saves are atomic, keep the file's permission bits, and sync to every other open view through the existing live-change watcher.
 - **Git worktrees**: switch checkouts from the sidebar while keeping sessions from the same repository grouped together.
 - **Web-based configuration**: manage provider login and API keys, models, model tests, plugin packages, and skills without leaving Pi Web.
 - **English, Simplified Chinese, and Traditional Chinese UI**: Pi Web follows the browser language initially and provides a language switcher in the top bar.
 
-## Quick Start
+## Run This Fork
+
+Use Node.js 22.19.0 or newer and clone this repository's `custom` branch:
+
+```bash
+git clone --branch custom https://github.com/alfahluzi/pi-web.git
+cd pi-web
+npm ci
+npm run dev
+```
+
+Open [http://127.0.0.1:30141](http://127.0.0.1:30141). This starts the development server, not a production deployment. Do not run a build while the development server is running.
+
+To enable terminal-oriented extensions' custom UI on macOS or Linux:
+
+```bash
+PI_WEB_EXTENSION_MODE=tui npm run dev
+```
+
+### Upstream npm Distribution
+
+The npm package `@agegr/pi-web` and Docker image `ghcr.io/agegr/pi-web` belong to upstream. Installing them does **not** install this fork's custom features. The upstream commands below are retained for reference.
 
 Pi Web requires Node.js 22.19.0 or newer. Check your version with `node --version`, then run:
 
@@ -65,7 +148,7 @@ For port and hostname, command-line options override the corresponding environme
 | `PI_WEB_PASSWORD` | Enable browser password login; API clients may use Basic Auth with username `pi` | Authentication disabled |
 | `PI_WEB_IDLE_TIMEOUT_MS` | Session idle timeout in milliseconds, up to `2147483647`; `0` disables idle shutdown; invalid or out-of-range values use the default | `600000` (10 min) |
 | `PI_WEB_SHUTDOWN_DEADLINE_MS` | How long extensions get to handle `session_shutdown` before a closing session is disposed anyway, in milliseconds up to `2147483647`; `0`, invalid or out-of-range values use the default | `5000` (5 s) |
-| `PI_WEB_EXTENSION_MODE` | Extension run mode advertised to extensions as `ctx.mode`: `rpc` (default) or `tui`. Pi Web renders extension custom components as ANSI text, so `tui` lets terminal-oriented extensions (e.g. `@juicesharp/rpiv-ask-user-question`) show their rich custom UI instead of a dialog walker. | `rpc` |
+| `PI_WEB_EXTENSION_MODE` | Fork-only: mode advertised to extensions as `ctx.mode`, one of `rpc`, `tui`, `json`, or `print`. Use `tui` for terminal-oriented extensions that gate custom UI on this mode. This does not provide raw terminal input. | `rpc` |
 | `PI_CODEMODE_MAX_WORKERS` | pi worker limit for codemode scripts, shared across sessions and subagents. Pi Web sets `8` when unset or empty; each script may use up to 256 MB. | `8` |
 
 Set `PI_WEB_APP_NAME` before starting the server (for example, `PI_WEB_APP_NAME='Work Pi' pi-web`). After changing it, restart the server to serve the new manifest; no rebuild is required. Updates to the name of an already installed PWA are managed by the browser and are not guaranteed to appear immediately. This does not change the page title or icons.
