@@ -1,30 +1,33 @@
 "use client";
 
-import { memo, useState, useRef, useEffect, useMemo } from "react";
+import { Fragment, memo, useState, useRef, useEffect, useMemo, type CSSProperties, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import { MarkdownBody } from "./MarkdownBody";
 import { ImagePreview } from "./ImagePreview";
 import { ThinkingIcon } from "./ThinkingIcon";
 import { copyText } from "@/lib/clipboard";
 import { useI18n } from "@/hooks/useI18n";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
-import { getAssistantErrorMessage, getThinkingPreview, hasAssistantAnswer, isAssistantTruncated, isEmptyThinkingBlock, splitThinkingPieces } from "@/lib/message-display";
+import { getAssistantErrorMessage, getThinkingPreview, hasAssistantAnswer, isAssistantAborted, isAssistantTruncated, isEmptyThinkingBlock, splitThinkingPieces } from "@/lib/message-display";
 import { formatTurnDuration } from "@/lib/turn-duration";
-import { parseUnifiedPatch, type SplitDiffCell, type SplitDiffFile } from "@/lib/patch";
+import { diffGapLabel, parseUnifiedPatch, unifiedDiffLines, type SplitDiffCell, type SplitDiffFile, type SplitDiffGap, type UnifiedDiffLine } from "@/lib/patch";
 import { applyPatchPreviewToFiles, applyPatchResultHasFailures, extractApplyPatchPaths, getApplyPatchInputText, parseApplyPatchInput } from "@/lib/apply-patch";
 import { isApplyPatchToolName, isEditToolName, isWriteToolName } from "@/lib/tool-names";
 import { isToolCallExpanded, setToolCallExpanded } from "@/lib/tool-call-expansion";
 import { isThinkingExpandedByDefault, THINKING_EXPANDED_EVENT } from "@/lib/thinking-expansion-preference";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
 import type { WrittenFile } from "@/lib/turn-written-files";
-import { skillExpansionToCommand } from "@/lib/slash-display";
+import { skillExpansionContent, skillExpansionToCommand } from "@/lib/slash-display";
 import type { SubagentToolDetails } from "@/lib/subagent-extension";
 import { CODEMODE_TOOL_NAME, codemodeCalls, codemodeScript, codemodeScriptPreview, stripCodemodeHeader } from "@/lib/codemode-view";
 import { CodemodeCallList } from "./CodemodeToolView";
 import { JsonTree, asJsonTreeValue } from "./JsonTree";
+import { toolFieldsOfInput, toolInputPreview, type ToolField } from "@/lib/tool-fields";
+import { parseStreamingJson } from "@earendil-works/pi-ai/utils/json-parse";
 import { mcpToolLabel, prettyMcpResultText } from "@/lib/mcp-tool-display";
 import { streamRateKey, streamRateStart, streamTokensPerSecond, type StreamRateStart } from "@/lib/stream-token-rate";
-import { getTranscriptNotices } from "@/lib/transcript-notices";
+import { formatNoticeTokens, getTranscriptNotices } from "@/lib/transcript-notices";
 import { TRANSCRIPT_NOTICE_WARNING_COLOR, transcriptNoticeText } from "@/components/TranscriptNotices";
 import type {
   AgentMessage,
@@ -199,7 +202,8 @@ interface Props {
   onOpenSubagent?: (sessionId: string, label: string) => void;
   entryId?: string;
   searchBlock?: AssistantContentBlock;
-  onFork?: (entryId: string) => void;
+  /** `message` as the composer takes it back: pi's /fork puts the forked message in the editor. */
+  onFork?: (entryId: string, message: UserMessage) => void;
   forking?: boolean;
   onEditContent?: (message: UserMessage, entryId: string) => void;
   onCancelEdit?: () => void;
@@ -337,7 +341,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   cwd?: string;
   onOpenFile?: (filePath: string, page?: number) => void;
   entryId?: string;
-  onFork?: (entryId: string) => void;
+  onFork?: (entryId: string, message: UserMessage) => void;
   forking?: boolean;
   onEditContent?: (message: UserMessage, entryId: string) => void;
   onCancelEdit?: () => void;
@@ -495,7 +499,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
                 )}
               </div>
               {expanded && (
-                <MarkdownBody className="markdown-user-message" keepLineBreaks cwd={cwd} onOpenFile={onOpenFile}>{content}</MarkdownBody>
+                <MarkdownBody className="markdown-user-message" keepLineBreaks cwd={cwd} onOpenFile={onOpenFile}>{skillExpansionContent(content) ?? content}</MarkdownBody>
               )}
             </div>
           ) : (
@@ -547,7 +551,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
                   <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                 </svg>
               )}
-               {copied ? t("i18n.copied") : t("i18n.copy")}
+               <span className="message-action-label">{copied ? t("i18n.copied") : t("i18n.copy")}</span>
             </button>
           </div>
           {(canFork || canEdit || canCancelEdit) && (
@@ -579,7 +583,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
                     <polyline points="15 10 20 15 15 20" />
                     <path d="M4 4v7a4 4 0 0 0 4 4h12" />
                   </svg>
-                   {t("i18n.editFromHere")}
+                   <span className="message-action-label">{t("i18n.editFromHere")}</span>
                 </button>
               )}
               {canCancelEdit && (
@@ -602,12 +606,12 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
                     <path d="M6 6l12 12M18 6L6 18" />
                   </svg>
-                  {t("i18n.cancel")}
+                  <span className="message-action-label">{t("i18n.cancel")}</span>
                 </button>
               )}
               {canFork && (
                 <button
-                  onClick={() => { onFork!(entryId!); }}
+                  onClick={() => { onFork!(entryId!, editTarget); }}
                   disabled={forking}
                    title={forking ? t("i18n.creatingSession") : t("i18n.newSessionTitle")}
                   style={{
@@ -630,13 +634,43 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
                     <circle cx="6" cy="18" r="3" />
                     <path d="M18 9a9 9 0 0 1-9 9" />
                   </svg>
-                   {forking ? t("i18n.creating") : t("i18n.newSession")}
+                   <span className="message-action-label">{forking ? t("i18n.creating") : t("i18n.newSession")}</span>
                 </button>
               )}
             </div>
           )}
           {time && <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{time}</span>}
         </div>
+      )}
+    </div>
+  );
+}
+
+export function AssistantMessageHeader({ modelName, estimatedTokens = 0, tps = null }: {
+  modelName?: string;
+  estimatedTokens?: number;
+  tps?: number | null;
+}) {
+  const { t } = useI18n();
+  const bg = tps !== null ? (tps >= 50 ? "#53b3cb" : tps >= 30 ? "#9bc53d" : tps >= 15 ? "#f9c22e" : "#e01a4f") : undefined;
+  return (
+    <div style={{ fontSize: 11, lineHeight: 1.5, minHeight: "calc(1.5em + 2px)", color: "var(--text-dim)", marginBottom: 4, display: "flex", alignItems: "center", gap: 6, fontVariantNumeric: "tabular-nums" }}>
+      {modelName && <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{modelName}</span>}
+      {estimatedTokens > 0 && (
+        <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, whiteSpace: "nowrap", color: "var(--text)" }} title={t("i18n.estimatedTokens")}>
+          <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, fontWeight: 400 }}>
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="5" y1="1.5" x2="5" y2="8.5" /><polyline points="2 6 5 8.5 8 6" />
+            </svg>
+            {/* Both minimum widths leave a pixel for per-glyph rounding at the widest value. */}
+            <span style={{ minWidth: "calc(6ch + 1px)" }}>{estimatedTokens}</span>
+          </span>
+          {tps !== null && (
+            <span style={{ marginLeft: 6, padding: "1px 6px", minWidth: "calc(9ch + 1px)", boxSizing: "content-box", textAlign: "center", borderRadius: 4, background: bg, color: "#fff", fontSize: 11, fontWeight: 400 }}>
+              {tps.toFixed(1)} t/s
+            </span>
+          )}
+        </span>
       )}
     </div>
   );
@@ -686,6 +720,7 @@ function AssistantMessageView({
     .filter(({ block }) => !isEmptyThinkingBlock(block, { isStreaming })), [message.content, isStreaming]);
   const blocks = useMemo(() => blockItems.map(({ block }) => block), [blockItems]);
   const providerError = getAssistantErrorMessage(message, { isStreaming });
+  const aborted = isAssistantAborted(message, { isStreaming });
   const truncated = isAssistantTruncated(message, { isStreaming });
   const unansweredTruncation = truncated && !hasAssistantAnswer(message);
   const [hovered, setHovered] = useState(false);
@@ -752,6 +787,15 @@ function AssistantMessageView({
     .map((b) => b.text)
     .join("\n");
 
+  const stats = message.usage ? formatUsage(message.usage) : [];
+  // A stop leads the line it ended on: "Stopped · ↑1.2k ↓567 · 12s".
+  if (aborted) stats.unshift({ text: t("chat.operationAborted") }, ...(stats.length > 0 ? [{ text: "·" }] : []));
+  if (turnDurationMs !== undefined) {
+    if (stats.length > 0) stats.push({ text: "·" });
+    const time = formatTurnDuration(turnDurationMs);
+    stats.push(formatDurationPart(t("chat.turnDuration", { time }), time));
+  }
+
   const copyContent = () => {
     copyText(textContent).then(() => {
       setCopied(true);
@@ -810,7 +854,7 @@ function AssistantMessageView({
     return () => clearInterval(id);
   }, [isStreaming]);
 
-  if (blocks.length === 0 && !isStreaming && !providerError && !truncated) return null;
+  if (blocks.length === 0 && !isStreaming && !providerError && !truncated && !aborted) return null;
 
   return (
     <div
@@ -820,47 +864,11 @@ function AssistantMessageView({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {/* Model label */}
-      <div
-        style={{
-          fontSize: 11,
-          color: "var(--text-dim)",
-          marginBottom: 4,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
-        {message.provider && (
-          <span>{getModelDisplayName(message.provider, message.model, modelNames)}</span>
-        )}
-        {isStreaming && (() => {
-          const est = Math.round(estimatedTokens);
-          return (
-            <>
-
-              {est > 0 && (
-                <span style={{ display: "flex", alignItems: "center", gap: 4, color: "var(--text)" }} title={t("i18n.estimatedTokens")}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 2, fontSize: 11, fontWeight: 400 }}>
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="5" y1="1.5" x2="5" y2="8.5" /><polyline points="2 6 5 8.5 8 6" />
-                    </svg>
-                    {est}
-                  </span>
-                  {tps !== null && (() => {
-                    const bg = tps >= 50 ? "#53b3cb" : tps >= 30 ? "#9bc53d" : tps >= 15 ? "#f9c22e" : "#e01a4f";
-                    return (
-                      <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 4, background: bg, color: "#fff", fontSize: 11, fontWeight: 400 }}>
-                        {tps.toFixed(1)} t/s
-                      </span>
-                    );
-                  })()}
-                </span>
-              )}
-            </>
-          );
-        })()}
-      </div>
+      <AssistantMessageHeader
+        modelName={message.provider ? getModelDisplayName(message.provider, message.model, modelNames) : undefined}
+        estimatedTokens={isStreaming ? Math.round(estimatedTokens) : 0}
+        tps={isStreaming ? tps : null}
+      />
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {/* Not keyed by the entry id: a message of this run gets one when the file is
@@ -942,12 +950,13 @@ function AssistantMessageView({
       <div style={{
         display: "flex", alignItems: "center", gap: 8, marginTop: 4,
       }}>
-        {(message.usage || turnDurationMs !== undefined) && !isStreaming && (
-          <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-            {[
-              message.usage ? formatUsage(message.usage) : null,
-              turnDurationMs !== undefined ? t("chat.turnDuration", { time: formatTurnDuration(turnDurationMs) }) : null,
-            ].filter(Boolean).join(" \u00b7 ")}
+        {stats.length > 0 && !isStreaming && (
+          // One item per count: a single space at 11px ran them together. The
+          // spaces stay in the text for copying; the flex gap draws the room.
+          <div style={{ display: "flex", flexWrap: "wrap", columnGap: 7, fontSize: 11, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
+            {stats.map((part, index) => (
+              <Fragment key={index}>{index > 0 && " "}<UsagePart part={part} /></Fragment>
+            ))}
           </div>
         )}
         {textContent && !isStreaming && (
@@ -980,11 +989,11 @@ function AssistantMessageView({
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
               </svg>
             )}
-             {copied ? t("i18n.copied") : t("i18n.copy")}
+             <span className="message-action-label">{copied ? t("i18n.copied") : t("i18n.copy")}</span>
           </button>
         )}
         {time && !isStreaming && (
-          <span style={{ fontSize: 10, color: "var(--text-dim)", marginLeft: "auto" }}>{time}</span>
+          <span style={{ fontSize: 10, color: "var(--text-dim)", marginLeft: "auto", whiteSpace: "nowrap" }}>{time}</span>
         )}
       </div>
     </div>
@@ -1174,7 +1183,9 @@ export function formatToolDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
 }
 
-function ToolCallBlock({ block, result, duration, onOpenSubagent }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number; onOpenSubagent?: (sessionId: string, label: string) => void }) {
+// `resultFooter` is drawn under the result, so only while the card is expanded:
+// what it offers acts on the result the reader is looking at.
+function ToolCallBlock({ block, result, duration, onOpenSubagent, resultFooter }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number; onOpenSubagent?: (sessionId: string, label: string) => void; resultFooter?: ReactNode }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(() => isToolCallExpanded(block.toolCallId));
   const toggleExpanded = () => {
@@ -1182,10 +1193,15 @@ function ToolCallBlock({ block, result, duration, onOpenSubagent }: { block: Too
     setToolCallExpanded(block.toolCallId, next);
     setExpanded(next);
   };
-  const inputStr = getWrittenFileText(block) ?? getToolCallInputText(block);
+  const writtenFileText = getWrittenFileText(block);
+  const inputStr = writtenFileText ?? getToolCallInputText(block);
   const isStreamingInput = block.rawInput !== undefined;
   const isEditTool = isEditToolName(block.toolName);
   const resultDiff = result && !result.isError ? getResultDiff(result) : null;
+  // A call that names no file (an anchor-addressed edit) is labelled with the
+  // one file its result's patch changed, the path its TUI renderer shows.
+  const resultDiffText = resultDiff?.text;
+  const resultPatchPath = useMemo(() => singlePatchPath(resultDiffText), [resultDiffText]);
   const patchFiles = getApplyPatchFiles(block, result);
   const patchLabel = isApplyPatchToolName(block.toolName)
     ? summarizeApplyPatchInput(block)
@@ -1203,6 +1219,15 @@ function ToolCallBlock({ block, result, duration, onOpenSubagent }: { block: Too
   const jsonArgs = isStreamingInput || codemode || patchFiles || isEditTool || writtenText !== null
     ? null
     : asJsonTreeValue(block.input, typeof inputStr === "string" ? inputStr.length : 0);
+
+  // Flat arguments as rows instead of a JSON blob, unless the card has a view of
+  // its own (a write's file text, codemode, an applied patch). See `lib/tool-fields.ts`.
+  // Input still streaming goes through pi's own partial parse, the arguments its
+  // TUI draws live, so a multi-line command shows its lines before the call ends.
+  const toolFields =
+    expanded && writtenFileText === null && codemode === null && patchFiles === null
+      ? toolFieldsOfInput(isStreamingInput ? parseStreamingJson(block.rawInput) : block.input)
+      : null;
 
   // `server/tool` instead of the registered `mcp__server__tool`, as pi's TUI shows it.
   const mcpLabel = mcpToolLabel(block.toolName, result?.details);
@@ -1263,7 +1288,7 @@ function ToolCallBlock({ block, result, duration, onOpenSubagent }: { block: Too
           <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
             {isStreamingInput
               ? t("chat.generatingToolInput")
-              : (patchLabel ?? (codemode ? codemodeScriptPreview(codemode.code) : getToolPreview(block)))}
+              : (patchLabel ?? (codemode ? codemodeScriptPreview(codemode.code) : toolInputPreview(block.input, resultPatchPath)))}
           </span>
           {codemodeCallCount > 0 && (
             <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
@@ -1292,7 +1317,17 @@ function ToolCallBlock({ block, result, duration, onOpenSubagent }: { block: Too
 
       {/* ── Expanded: input args (only when no richer view exists); a codemode script in place of its JSON ── */}
       {expanded && (isStreamingInput || !isEditTool) && !patchFiles && (
-        jsonArgs ? (
+        toolFields ? (
+          <div
+            style={{
+              padding: "6px 10px 8px",
+              background: "var(--bg-subtle)",
+              borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
+            }}
+          >
+            <ToolFieldRows fields={toolFields} />
+          </div>
+        ) : jsonArgs ? (
           <JsonTree value={jsonArgs} isError={isError} />
         ) : (
           <pre
@@ -1350,6 +1385,7 @@ function ToolCallBlock({ block, result, duration, onOpenSubagent }: { block: Too
           />
         )
       )}
+      {expanded && result && resultFooter}
     </div>
   );
 }
@@ -1379,7 +1415,21 @@ function SplitPatchView({ text }: { text: string }) {
   return <SplitFilesView files={files} />;
 }
 
+/** Two code columns side by side, or one column of patch lines. */
+export type PatchDiffLayout = "split" | "stacked";
+
+/**
+ * The patch as the viewport can show it. Two columns need two code columns side
+ * by side, which a phone does not have: there the same rows read as one column
+ * — a removed line above the line that replaces it, each with its own number —
+ * the way the file viewer's diff has always been drawn. See `unifiedDiffLines()`.
+ */
 function SplitFilesView({ files }: { files: SplitDiffFile[] }) {
+  const layout: PatchDiffLayout = useIsMobile() ? "stacked" : "split";
+  return <PatchDiffFiles files={files} layout={layout} />;
+}
+
+export function PatchDiffFiles({ files, layout }: { files: SplitDiffFile[]; layout: PatchDiffLayout }) {
   const { t } = useI18n();
   const showFileHeaders = files.length > 1;
 
@@ -1397,7 +1447,7 @@ function SplitFilesView({ files }: { files: SplitDiffFile[] }) {
             lineHeight: 1.55,
           }}
         >
-          {showFileHeaders && (
+          {showFileHeaders && layout === "split" && (
             <div
               style={{
                 display: "grid",
@@ -1414,10 +1464,34 @@ function SplitFilesView({ files }: { files: SplitDiffFile[] }) {
             </div>
           )}
 
+          {showFileHeaders && layout === "stacked" && stackedFilePath(file) && (
+            <div
+              title={stackedFilePath(file)}
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 1,
+                padding: "5px 10px",
+                color: "var(--text-dim)",
+                background: "var(--bg-panel)",
+                borderBottom: "1px solid var(--border)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {stackedFilePath(file)}
+            </div>
+          )}
+
+          {layout === "split" && (
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)" }}>
             {file.rows.map((row, rowIndex) => {
               if (row.type === "hunk") {
                 return null;
+              }
+              if (row.type === "gap") {
+                return <DiffGapRow key={rowIndex} gap={row} />;
               }
 
               return (
@@ -1428,9 +1502,56 @@ function SplitFilesView({ files }: { files: SplitDiffFile[] }) {
               );
             })}
           </div>
+          )}
+
+          {layout === "stacked" && unifiedDiffLines(file).map((line, lineIndex) => (
+            line.type === "gap"
+              ? <DiffGapRow key={lineIndex} gap={line} />
+              : <StackedDiffLineView key={lineIndex} line={line} />
+          ))}
         </div>
       ))}
     </div>
+  );
+}
+
+/** Unchanged lines the patch leaves out between two hunks, across the whole width. */
+function DiffGapRow({ gap }: { gap: SplitDiffGap }) {
+  const { t } = useI18n();
+  return (
+    <div
+      style={{
+        gridColumn: "1 / -1",
+        padding: "0 10px",
+        color: "var(--text-dim)",
+        background: "var(--bg-panel)",
+        borderTop: "1px solid var(--border)",
+        borderBottom: "1px solid var(--border)",
+        userSelect: "none",
+      }}
+    >
+      {gap.count === null ? "⋯" : `⋯ ${diffGapLabel(gap.count, t)}`}
+    </div>
+  );
+}
+
+/** The file a stacked section is named for: the new path, the one that survives, unless the file was deleted. */
+function stackedFilePath(file: SplitDiffFile): string {
+  if (file.newPath && file.newPath !== "/dev/null") return file.newPath;
+  return file.oldPath || file.newPath || "";
+}
+
+function StackedDiffLineView({ line }: { line: UnifiedDiffLine }) {
+  return (
+    <SplitDiffCellView
+      side="right"
+      cell={{
+        // One gutter, so a removed line keeps the old number and everything else the new one.
+        lineNo: line.type === "removed" ? line.oldLineNo : line.newLineNo,
+        text: line.text,
+        type: line.type,
+      }}
+    />
   );
 }
 
@@ -1620,6 +1741,13 @@ function getResultDiff(result: ToolResultMessage): ResultDiff | null {
   if (diff) return { text: diff };
 
   return null;
+}
+
+/** The file a result's patch changed, when it changed exactly one. */
+function singlePatchPath(text: string | undefined): string | null {
+  if (!text) return null;
+  const files = parseUnifiedPatch(text);
+  return files?.length === 1 ? stackedFilePath(files[0]) || null : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1934,7 +2062,7 @@ function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessag
                   })}
                 </div>
               )}
-              {text ? <MarkdownBody className="markdown-custom-message" cwd={cwd} onOpenFile={onOpenFile}>{text}</MarkdownBody> : <span style={{ color: "var(--text-dim)", fontSize: 12 }}>{t("i18n.noMessage")}</span>}
+              {text ? <MarkdownBody className="markdown-custom-message" keepTextLayout cwd={cwd} onOpenFile={onOpenFile}>{text}</MarkdownBody> : <span style={{ color: "var(--text-dim)", fontSize: 12 }}>{t("i18n.noMessage")}</span>}
             </div>
 
             <div
@@ -2044,9 +2172,10 @@ export function getToolCallInputText(block: ToolCallContent): string {
 
 const WRITE_VIEW_KEYS = new Set(["path", "file_path", "content"]);
 
-// A write's file text in place of its JSON. Streamed input is still incomplete
-// JSON, and any other argument (a mode, a title) would vanish from this view,
-// so those calls, and an empty file, keep the generic view.
+// A write's file text in place of its JSON: the header already shows the path.
+// Streamed input is still incomplete JSON, and any other argument (a mode, a
+// title) would vanish from this view, so those calls, and an empty file, keep
+// the generic view.
 function getWrittenFileText(block: ToolCallContent): string | null {
   if (block.rawInput !== undefined || !isWriteToolName(block.toolName)) return null;
   const { content } = block.input;
@@ -2054,27 +2183,57 @@ function getWrittenFileText(block: ToolCallContent): string | null {
   return Object.keys(block.input).every((key) => WRITE_VIEW_KEYS.has(key)) ? content : null;
 }
 
+const TOOL_FIELD_LABEL: CSSProperties = {
+  padding: "4px 12px 4px 0",
+  color: "var(--text-dim)",
+  fontSize: "calc(11px + var(--chat-font-size-offset, 0px))",
+  whiteSpace: "nowrap",
+  verticalAlign: "top",
+};
+
+const TOOL_FIELD_VALUE: CSSProperties = {
+  padding: "4px 0",
+  color: "var(--text-muted)",
+  fontSize: "calc(12px + var(--chat-font-size-offset, 0px))",
+  fontFamily: "var(--font-mono)",
+  overflowWrap: "anywhere",
+};
+
+// A value with newlines of its own keeps them, scrolled in place.
+const TOOL_FIELD_BLOCK: CSSProperties = {
+  margin: 0,
+  padding: "8px 10px",
+  maxHeight: 260,
+  overflow: "auto",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  background: "var(--bg)",
+  font: "inherit",
+  lineHeight: 1.5,
+  whiteSpace: "pre-wrap",
+};
+
+function ToolFieldRows({ fields }: { fields: ToolField[] }) {
+  return (
+    <table style={{ borderCollapse: "collapse" }}>
+      <tbody>
+        {fields.map((field) => (
+          <tr key={field.key}>
+            <td style={TOOL_FIELD_LABEL}>{field.key}</td>
+            <td style={TOOL_FIELD_VALUE}>
+              {field.multiline ? <pre style={TOOL_FIELD_BLOCK}>{field.value}</pre> : field.value}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function formatCustomType(type: string): string {
   return type || "extension";
 }
 
-
-function getToolPreview(block: ToolCallContent): string {
-  const input = block.input;
-  if (!input || typeof input !== "object") return "";
-  const keys = Object.keys(input);
-  if (keys.length === 0) return "";
-
-  // Common tool input patterns
-  if ("command" in input) return String(input.command).slice(0, 120);
-  if ("path" in input) return String(input.path).slice(0, 120);
-  if ("file_path" in input) return String(input.file_path).slice(0, 120);
-  if ("pattern" in input) return String(input.pattern).slice(0, 120);
-  if ("query" in input) return String(input.query).slice(0, 120);
-
-  const first = input[keys[0]];
-  return String(first).slice(0, 120);
-}
 
 function formatUsage(usage: {
   input: number;
@@ -2082,17 +2241,75 @@ function formatUsage(usage: {
   cacheRead: number;
   cacheWrite: number;
   cost: { total: number };
-}): string {
-  const parts = [];
-  if (usage.input) parts.push(`${usage.input.toLocaleString()} in`);
-  if (usage.output) parts.push(`${usage.output.toLocaleString()} out`);
-  if (usage.cacheRead) parts.push(`${usage.cacheRead.toLocaleString()} cache R`);
-  if (usage.cacheWrite) parts.push(`${usage.cacheWrite.toLocaleString()} cache W`);
-  if (usage.cost?.total) parts.push(`$${usage.cost.total.toFixed(4)}`);
-  return parts.join(" · ");
+}): StatPart[] {
+  // pi's TUI footer: ↑1.2k ↓567 R8.9k W12, with its formatTokens().
+  const parts: StatPart[] = [];
+  if (usage.input) parts.push({ icon: "up", before: "↑", text: formatNoticeTokens(usage.input) });
+  if (usage.output) parts.push({ icon: "down", before: "↓", text: formatNoticeTokens(usage.output) });
+  if (usage.cacheRead) parts.push({ text: `R${formatNoticeTokens(usage.cacheRead)}` });
+  if (usage.cacheWrite) parts.push({ text: `W${formatNoticeTokens(usage.cacheWrite)}` });
+  if (usage.cost?.total) parts.push({ text: `$${usage.cost.total.toFixed(4)}` });
+  return parts;
+}
+
+// "took 12s" as a clock and "12s": the words around the time stay as hidden
+// text, wherever the language puts them.
+function formatDurationPart(label: string, time: string): StatPart {
+  const index = label.indexOf(time);
+  if (index < 0) return { text: label };
+  return { icon: "clock", before: label.slice(0, index), text: time, after: label.slice(index + time.length) };
+}
+
+/** One count of the stats line; `before`/`after` are copied and read aloud, not shown. */
+interface StatPart {
+  text: string;
+  icon?: "up" | "down" | "clock";
+  before?: string;
+  after?: string;
+}
+
+const STAT_ICON_PATHS = {
+  up: "M6 10.5V1.5M2.5 5 6 1.5 9.5 5",
+  down: "M6 1.5v9M2.5 7 6 10.5 9.5 7",
+  clock: "M6 1.25a4.75 4.75 0 1 0 0 9.5 4.75 4.75 0 1 0 0-9.5M6 3.5V6l1.75 1",
+};
+
+// Unseen but still text: font-size 0 stays in a copied selection, where a
+// zero-width overflow box drops it and sr-only's absolute box adds a line break.
+const HIDDEN_STAT_TEXT: CSSProperties = { fontSize: 0 };
+
+// ↑ and ↓ come from whatever font has them: Segoe UI or a CJK fallback on
+// Windows draws them small, heavy or off the baseline. The icons are drawn
+// here instead; their text stays, zero-width, for copying and screen readers.
+// Everything stays inline: a block or flex box would copy as a line break
+// between the icon and its count.
+function UsagePart({ part }: { part: StatPart }) {
+  if (!part.icon) return <span>{part.text}</span>;
+  return (
+    <span>
+      {part.before && <span style={HIDDEN_STAT_TEXT}>{part.before}</span>}
+      <svg
+        width={part.icon === "clock" ? 10 : 9}
+        height={part.icon === "clock" ? 10 : 9}
+        viewBox="0 0 12 12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+        style={{ display: "inline", verticalAlign: part.icon === "clock" ? "-0.1em" : "-0.05em", marginRight: part.icon === "clock" ? 3 : 1 }}
+      >
+        <path d={STAT_ICON_PATHS[part.icon]} />
+      </svg>
+      {part.text}
+      {part.after && <span style={HIDDEN_STAT_TEXT}>{part.after}</span>}
+    </span>
+  );
 }
 
 function BashExecutionView({ message, sessionId }: { message: BashExecutionMessage; sessionId?: string }) {
+  const { t } = useI18n();
   const [fullOutput, setFullOutput] = useState<string | null>(null);
   const [loadingFull, setLoadingFull] = useState(false);
   const [fullError, setFullError] = useState<string | null>(null);
@@ -2102,7 +2319,7 @@ function BashExecutionView({ message, sessionId }: { message: BashExecutionMessa
   const fullOutputUrl = sessionId && message.fullOutputPath
     ? `/api/agent/${encodeURIComponent(sessionId)}/bash-output?path=${encodeURIComponent(message.fullOutputPath)}`
     : null;
-  const showFullButton = message.truncated && fullOutputUrl && fullOutput === null;
+  const fullShown = fullOutput !== null;
   const displayOutput = fullOutput ?? message.output;
 
   async function loadFullOutput() {
@@ -2111,14 +2328,15 @@ function BashExecutionView({ message, sessionId }: { message: BashExecutionMessa
     setFullError(null);
     try {
       const res = await fetch(fullOutputUrl);
-      const d = await res.json() as { success?: boolean; data?: { output?: string }; error?: string };
-      if (d.success) {
+      const d = await res.json().catch(() => null) as { success?: boolean; data?: { output?: string } } | null;
+      if (d?.success) {
         setFullOutput(d.data?.output ?? "");
       } else {
-        setFullError(d.error ?? "failed");
+        // 413: past the inline limit, the download still streams it.
+        setFullError(t(res.status === 413 ? "chat.fullOutputTooLarge" : "chat.fullOutputUnavailable"));
       }
-    } catch (e) {
-      setFullError(String(e));
+    } catch {
+      setFullError(t("chat.fullOutputUnavailable"));
     } finally {
       setLoadingFull(false);
     }
@@ -2145,29 +2363,46 @@ function BashExecutionView({ message, sessionId }: { message: BashExecutionMessa
         timestamp: message.timestamp,
       };
 
+  // pi keeps the end of a long output (2000 lines or 50KB) and writes all of it
+  // to a temp file. The card's result is that end, so the line under it says so
+  // and offers the rest. It sits inside the expanded card: loading the file
+  // changes the text right above it.
+  const linkStyle: CSSProperties = { color: "var(--accent)", fontSize: 11, textDecoration: "underline" };
+  const fullOutputFooter = message.truncated && fullOutputUrl ? (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "baseline",
+        gap: "2px 10px",
+        padding: "5px 10px",
+        fontSize: 11,
+        color: "var(--text-dim)",
+        borderTop: `1px solid ${isError ? "rgba(248,113,113,0.3)" : "rgba(34,197,94,0.15)"}`,
+      }}
+    >
+      <span role="status">
+        {fullError ?? t(fullShown ? "chat.fullOutputShown" : "chat.outputTruncated")}
+      </span>
+      {!fullShown && (
+        <button
+          type="button"
+          onClick={loadFullOutput}
+          disabled={loadingFull}
+          style={{ ...linkStyle, background: "none", border: "none", cursor: loadingFull ? "default" : "pointer", padding: 0 }}
+        >
+          {loadingFull ? t("chat.loadingFullOutput") : t("chat.viewFullOutput")}
+        </button>
+      )}
+      <a href={`${fullOutputUrl}&download=1`} style={linkStyle}>
+        {t("chat.downloadFullOutput")}
+      </a>
+    </div>
+  ) : null;
+
   return (
     <div style={{ margin: "6px 0" }}>
-      <ToolCallBlock block={block} result={result} />
-      {message.truncated && fullOutputUrl && (
-        <div style={{ padding: "4px 10px", fontSize: 11, marginTop: -1 }}>
-          {showFullButton && (
-            <button
-              onClick={loadFullOutput}
-              disabled={loadingFull}
-              style={{ background: "none", border: "none", color: "var(--accent)", cursor: loadingFull ? "default" : "pointer", fontSize: 11, padding: 0, textDecoration: "underline" }}
-            >
-              {loadingFull ? "loading…" : "view full output"}
-            </button>
-          )}
-          <a
-            href={`${fullOutputUrl}&download=1`}
-            style={{ marginLeft: showFullButton ? 10 : 0, color: "var(--accent)", fontSize: 11, textDecoration: "underline" }}
-          >
-            download full output
-          </a>
-          {fullError && <span style={{ marginLeft: 6, color: "var(--text-dim)", fontSize: 11 }}>({fullError})</span>}
-        </div>
-      )}
+      <ToolCallBlock block={block} result={result} resultFooter={fullOutputFooter} />
     </div>
   );
 }

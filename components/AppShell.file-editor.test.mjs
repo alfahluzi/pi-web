@@ -27,7 +27,7 @@ test("the active file viewer reports draft changes", () => {
 });
 
 test("the panel tab list marks file tabs that have unsaved drafts", () => {
-  assert.match(source, /const panelTabs: Tab\[\] = \[\.\.\.fileTabs\.map\(\(tab\) => \(\{ \.\.\.tab, dirty: dirtyFileTabs\.has\(tab\.id\) \}\)\)/);
+  assert.match(source, /const panelTabs: Tab\[\] = orderPanelTabs\(\[\s*\.\.\.fileTabs\.map\(\(tab\) => \(\{ \.\.\.tab, dirty: dirtyFileTabs\.has\(tab\.id\) \}\)\)/);
 });
 
 test("closing a dirty file tab confirms before dropping it", () => {

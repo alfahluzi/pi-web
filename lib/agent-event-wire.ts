@@ -6,6 +6,13 @@ export interface AgentEventLike {
   [key: string]: unknown;
 }
 
+/**
+ * How often an agent event stream sends `{ type: "heartbeat" }`. It is a data event, not an SSE
+ * comment, so the browser's EventSource sees it: a stream silent for a few of these is dead
+ * (a half-open connection, a proxy that dropped it), and `AgentEventConnection` reconnects.
+ */
+export const AGENT_EVENT_HEARTBEAT_MS = 30_000;
+
 type JsonMessageUpdateEvent = Extract<
   JsonAgentSessionEvent,
   { type: "message_update" }
@@ -30,6 +37,8 @@ const OMITTED_EVENT_TYPES = new Set([
   // Carries the whole appended entry (an extension's custom entry, such as a
   // codemode `store()` write, can be 1 MiB), and nothing in the browser reads it.
   "entry_appended",
+  // A `!` command's output per chunk: the wrapper sends `bash_output` snapshots instead.
+  "bash_execution_update",
 ]);
 
 /**

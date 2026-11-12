@@ -2,7 +2,7 @@
 
 import { useEffect, useImperativeHandle, useLayoutEffect, useState, useCallback, useMemo, useRef, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type Ref, type RefObject, type UIEvent as ReactUIEvent } from "react";
 import type { SessionInfo } from "@/lib/types";
-import { listSessionFamilies, type SessionFamily } from "@/lib/session-family";
+import { listSessionFamilies, type SessionFamily, isHiddenRelation } from "@/lib/session-family";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { newSessionDeepLink, sessionDeepLink } from "@/lib/session-links";
 import { getProjectActivity, getRecentProjects } from "@/lib/project-groups";
@@ -53,12 +53,15 @@ import {
   projectRenameRequest,
   sessionMenuEntries,
   type SessionMenuActionId,
+  worktreeCreateFailure,
 } from "@/lib/sidebar-actions";
+import { shortenPath } from "@/lib/display-path";
 import { splitBeforeForkSuffix } from "@/lib/session-fork-name";
 import {
   mergeProjectChoices,
   newSessionContextKey,
   newSessionTargetForProject,
+  projectForCwd,
   withProjectAlias,
   type NewSessionContext,
   type NewSessionOptions,
@@ -73,7 +76,9 @@ import {
   type ProjectMovePosition,
   type SessionUiStateRequest,
 } from "@/lib/session-ui-state-shared";
+import { countFaviconUnread, syncFaviconBadge } from "@/lib/favicon-badge";
 import { focusIfLost, type FocusDocument } from "@/lib/stacked-dialog";
+import { noteRunningPoll } from "@/lib/page-debug";
 import { useFilesPlacement } from "@/hooks/useFilesPlacement";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -234,6 +239,12 @@ interface Props {
   /** Fired when a session that is not currently selected finishes running.
    *  Lets the app play a cross-workspace completion tone. */
   onBackgroundTaskDone?: () => void;
+  /**
+   * Sessions that finished while the tab was hidden (#1484): usually the
+   * selected one, which `unreadSessionIds` excludes. Counted by the favicon
+   * until the tab is opened again; never persisted, never dotted.
+   */
+  hiddenFinishedSessionIds?: Set<string>;
   onRunningSessionIdsChange?: (ids: Set<string>) => void;
   onSessionsChange?: (sessions: SessionInfo[]) => void;
 }
@@ -376,14 +387,21 @@ function saveLastCustomCwd(cwd: string): void {
   }
 }
 
+function parseUnreadSessionIds(raw: string | null): Set<string> {
+  if (!raw) return new Set();
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) return new Set(parsed.filter((id): id is string => typeof id === "string"));
+  } catch {
+    // A malformed value (an interrupted write, another client) means no markers.
+  }
+  return new Set();
+}
+
 function loadUnreadSessionIds(): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
-    const raw = window.localStorage.getItem(UNREAD_SESSIONS_STORAGE_KEY);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) return new Set(parsed.filter((id): id is string => typeof id === "string"));
-    return new Set();
+    return parseUnreadSessionIds(window.localStorage.getItem(UNREAD_SESSIONS_STORAGE_KEY));
   } catch {
     return new Set();
   }
@@ -499,7 +517,7 @@ function buttonAnchor(element: HTMLElement, align: "start" | "end"): SidebarMenu
   return { kind: "rect", rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, align };
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, onProjectMoved, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, onProjectMoved, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
@@ -544,8 +562,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [fileManagerError, setFileManagerError] = useState<string | null>(null);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [awaitingInputSessionIds, setAwaitingInputSessionIds] = useState<Set<string>>(() => new Set());
+  // Sessions whose subagents can still report back with a run there: not done yet (#1434).
+  const [subagentsActiveSessionIds, setSubagentsActiveSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
+  const previousActiveSessionIdsRef = useRef<Set<string>>(new Set());
   const currentSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
   const previousSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
   // Once polling has delivered a snapshot it is the source of truth for
@@ -772,11 +793,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         setRunningSessionIds((previous) => sameIdsOr(previous, data.runningSessionIds ?? []));
         setAwaitingInputSessionIds((previous) => sameIdsOr(previous, data.awaitingInputSessionIds ?? []));
       }
-      // Drop markers for deleted sessions and for subagents, whose completion
-      // is intentionally silent even if an older client marked them unread.
+      // Drop markers for deleted sessions and for hidden family members
+      // (subagents, side chats), whose completion is intentionally silent
+      // even if an older client marked them unread.
       const unreadEligibleIds = new Set(
         data.sessions
-          .filter((session) => session.relation?.kind !== "subagent")
+          .filter((session) => !isHiddenRelation(session.relation))
           .map((session) => session.id),
       );
       setUnreadSessionIds((prev) => {
@@ -883,6 +905,21 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     saveUnreadSessionIds(unreadSessionIds);
   }, [unreadSessionIds]);
 
+  // Another tab's read or mark-unread of the same session: its localStorage
+  // write is the only cross-tab notice there is, and the browser fires the
+  // storage event only in the tabs that did not write. Without adopting the
+  // written set here, a session read in the other tab keeps its dot in this
+  // one, and this tab's next local write would persist the stale marker
+  // again, resurrecting it everywhere after a refresh.
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== null && event.key !== UNREAD_SESSIONS_STORAGE_KEY) return;
+      setUnreadSessionIds((prev) => sameIdsOr(prev, [...parseUnreadSessionIds(event.newValue)]));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -904,19 +941,29 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       const current = new AbortController();
       controller?.abort();
       controller = current;
+      // The debug panel's record of this poll (noteRunningPoll() in the finally): the request
+      // alone, up to its answer, without the session-list reload that may follow.
+      const startedAt = Date.now();
+      let answeredAt: number | null = null;
+      let outcome: "ok" | "error" | "aborted" = "error";
+      let httpStatus: number | null = null;
       try {
         const res = await fetch("/api/agent/running", {
           cache: "no-store",
           signal: current.signal,
         });
+        httpStatus = res.status;
         if (!res.ok) return;
+        outcome = "ok";
         const data = await res.json() as {
           sessionListVersion: number;
           runningSessionIds?: string[];
           awaitingInputSessionIds?: string[];
           completionNotificationSuppressedSessionIds?: string[];
+          subagentsActiveSessionIds?: string[];
           sessionUiStateRevision?: number | null;
         };
+        answeredAt = Date.now();
         if (stopped || controller !== current) return;
         runningPollAuthoritativeRef.current = true;
         currentSuppressedCompletionSessionIdsRef.current = new Set(
@@ -924,6 +971,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         );
         setRunningSessionIds((previous) => sameIdsOr(previous, data.runningSessionIds ?? []));
         setAwaitingInputSessionIds((previous) => sameIdsOr(previous, data.awaitingInputSessionIds ?? []));
+        setSubagentsActiveSessionIds((previous) => sameIdsOr(previous, data.subagentsActiveSessionIds ?? []));
         // Pins and archive changed in another window: reload them.
         noteUiRevision(data.sessionUiStateRevision);
         if (data.sessionListVersion !== sessionListVersionRef.current) {
@@ -932,9 +980,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         }
       } catch {
         // Keep the last known state; the next visible-tab poll retries.
+        outcome = current.signal.aborted ? "aborted" : "error";
       } finally {
         if (controller === current) controller = null;
         schedule();
+        // Assignments only, after the next poll is scheduled: it cannot change how polling goes on.
+        noteRunningPoll(startedAt, outcome, httpStatus, answeredAt);
       }
     };
 
@@ -966,15 +1017,33 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onSessionsChange?.(allSessions);
   }, [allSessions, onSessionsChange]);
 
+  // The tab strip's favicon mirrors what the rows show (#1483): a persistent
+  // badge after the completion sound fades, cleared the same way the blue dot is.
+  // Sessions that finished while the tab was hidden count too (#1484): the rows
+  // exclude the selected session ("already looking"), which is false while hidden.
+  useEffect(() => {
+    syncFaviconBadge({
+      awaiting: awaitingInputSessionIds.size,
+      unread: countFaviconUnread(unreadSessionIds, hiddenFinishedSessionIds),
+    });
+  }, [awaitingInputSessionIds, unreadSessionIds, hiddenFinishedSessionIds]);
+
   useEffect(() => {
     const previous = previousRunningSessionIdsRef.current;
     const completedInBackground = [...previous].filter((id) => !runningSessionIds.has(id) && id !== selectedSessionId);
+    // A session is done once it neither runs nor waits for a subagent's report, which starts
+    // another run there: its first run's end is not the task's (#1434). Leaving that set is the
+    // completion, so a last run too short for any poll to see still counts.
+    const active = new Set([...runningSessionIds, ...subagentsActiveSessionIds]);
+    const finishedInBackground = [...previousActiveSessionIdsRef.current].filter((id) => !active.has(id) && id !== selectedSessionId);
+    // Subagent runs and side chats finish silently: a side chat is an aside
+    // the user drives, not a background task that owes a notification.
     const knownSubagentIds = new Set(
       allSessions
-        .filter((session) => session.relation?.kind === "subagent")
+        .filter((session) => isHiddenRelation(session.relation))
         .map((session) => session.id),
     );
-    const completedWithNotifications = completedInBackground.filter(
+    const completedWithNotifications = finishedInBackground.filter(
       (id) => !previousSuppressedCompletionSessionIdsRef.current.has(id) && !knownSubagentIds.has(id),
     );
     const newlyRunning = [...runningSessionIds].filter((id) => !previous.has(id));
@@ -1001,12 +1070,16 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     }
 
     previousRunningSessionIdsRef.current = runningSessionIds;
+    previousActiveSessionIdsRef.current = active;
+    const previousSuppressed = previousSuppressedCompletionSessionIdsRef.current;
     previousSuppressedCompletionSessionIdsRef.current = new Set(
-      [...runningSessionIds].filter(
-        (id) => currentSuppressedCompletionSessionIdsRef.current.has(id) || knownSubagentIds.has(id),
+      [...active].filter(
+        (id) => currentSuppressedCompletionSessionIdsRef.current.has(id) || knownSubagentIds.has(id)
+          // A subagent waiting for its own subagents is no longer listed as suppressed.
+          || (previousSuppressed.has(id) && !runningSessionIds.has(id)),
       ),
     );
-  }, [runningSessionIds, selectedSessionId, allSessions, loadSessions, onBackgroundTaskDone]);
+  }, [runningSessionIds, subagentsActiveSessionIds, selectedSessionId, allSessions, loadSessions, onBackgroundTaskDone]);
 
   useEffect(() => {
     if (!selectedSessionId) return;
@@ -1030,34 +1103,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   const restoredRef = useRef(false);
 
-  const projectSelection = useCallback((root: string, key: string): ProjectSelection => ({
-    root,
-    key,
-  }), []);
-
   /** Resolve both display root and stable identity from server-provided data. */
-  const projectFor = useCallback((cwd: string | null): ProjectSelection | null => {
-    if (!cwd) return null;
-    // /api/cwd/validate resolves identity before a custom path becomes active,
-    // preventing one render with a raw path key from looking like a switch.
-    if (validatedProject?.cwd === cwd) {
-      return projectSelection(validatedProject.root, validatedProject.key);
-    }
-    if (worktreeState && worktreeState.forCwd === cwd) {
-      return projectSelection(worktreeState.projectRoot, worktreeState.projectKey);
-    }
-    // Any path in the loaded worktree list belongs to that project — covers
-    // worktrees without sessions, so switching to them keeps the row mounted.
-    if (worktreeState?.worktrees.some((w) => w.path === cwd)) {
-      return projectSelection(worktreeState.projectRoot, worktreeState.projectKey);
-    }
-    const match = allSessions.find((session) => (
-      session.cwd === cwd || (session.projectRoot ?? session.cwd) === cwd
-    ));
-    return match
-      ? projectSelection(match.projectRoot ?? match.cwd, workspaceKeyOf(match))
-      : projectSelection(cwd, cwd);
-  }, [validatedProject, worktreeState, allSessions, projectSelection]);
+  const projectFor = useCallback((cwd: string | null): ProjectSelection | null => (
+    cwd ? projectForCwd(cwd, { validated: validatedProject, listing: worktreeState, sessions: allSessions }) : null
+  ), [validatedProject, worktreeState, allSessions]);
 
   // The project of the sidebar's cwd: the files tab shows it, and its group in
   // the sessions tab exists even before it has a session.
@@ -1257,8 +1306,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cwd: project.root, branch }),
       });
-      const data = await res.json().catch(() => ({})) as { path?: string; error?: string };
-      if (!res.ok || data.error || !data.path) return { error: data.error ?? `HTTP ${res.status}` };
+      const data = await res.json().catch(() => ({})) as { path?: string; error?: string; code?: string; branch?: string; worktreePath?: string };
+      if (!res.ok || data.error || !data.path) {
+        const failure = worktreeCreateFailure(data, res.status);
+        return "key" in failure
+          ? { error: t(failure.key, { ...failure.params, path: shortenPath(failure.params.path) }) }
+          : failure;
+      }
       const path = data.path;
       setWorktreeState((prev) => (prev && prev.projectKey === project.key && !prev.worktrees.some((worktree) => worktree.path === path)
         ? { ...prev, worktrees: [...prev.worktrees, { path, branch, isMain: false }] }
@@ -1268,7 +1322,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) };
     }
-  }, []);
+  }, [t]);
 
   // The files tab's remove button. A checkout with changes answers "dirty",
   // and the picker asks before retrying with force.
@@ -2692,6 +2746,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     },
     onGroupNew: handleGroupNew,
     onGroupMenu: handleGroupMenu,
+    onPinEmptyGroup: (project: SidebarProject) => {
+      void applyUiState({ action: "pin-project", projectKey: project.key, root: project.root, pinned: true });
+      // The button goes with the pin: its group's header takes the focus.
+      focusAfterCommit(() => groupHeaderButton(project.key));
+    },
     onToggleArchiveGroup: handleToggleArchiveGroup,
     onArchiveGroupMenu: handleArchiveGroupMenu,
     onOpenOtherProject: handleOpenOtherProject,

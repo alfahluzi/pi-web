@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getFileIcon } from "./FileIcons";
 import { WebPanelIcon } from "./WebPanelIcon";
 import { useI18n } from "@/hooks/useI18n";
@@ -10,7 +10,7 @@ export interface Tab {
   id: string;
   label: string;
   filePath: string;
-  kind?: "terminal" | "agent" | "plugin";
+  kind?: "terminal" | "agent" | "plugin" | "side";
   closing?: boolean;
   sourceSessionId?: string | null;
   initialDisplayMode?: FileViewerDisplayMode;
@@ -31,26 +31,57 @@ interface Props {
   activeTabId: string;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
+  onReorderTab?: (source: string, target: string, after: boolean) => void;
 }
 
-export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onReorderTab }: Props) {
   const { t } = useI18n();
   const [hoveredClose, setHoveredClose] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const draggedId = useRef<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
+
+  // The strip has no scrollbar (globals.css), so a vertical wheel scrolls it
+  // sideways. Non-passive: the page must not scroll as well.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX) || list.scrollWidth <= list.clientWidth) return;
+      event.preventDefault();
+      list.scrollLeft += event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? list.clientWidth : 1);
+    };
+    list.addEventListener("wheel", onWheel, { passive: false });
+    return () => list.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Bring an opened or selected tab into view by moving the strip only:
+  // scrollIntoView could also scroll the panels around it.
+  useEffect(() => {
+    const list = listRef.current;
+    const tab = list?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    if (!list || !tab) return;
+    const strip = list.getBoundingClientRect();
+    const { left, right } = tab.getBoundingClientRect();
+    if (left < strip.left) list.scrollLeft -= strip.left - left;
+    else if (right > strip.right) list.scrollLeft += right - strip.right;
+  }, [activeTabId, tabs.length]);
 
   return (
     <div
+      ref={listRef}
       role="tablist"
+      className="tabbar-scroll"
       style={{
-        // The tabs fill the scrollport, not a fixed 36px: once they overflow,
-        // the app's scrollbar (globals.css) takes its height out of the bar,
-        // and 36px tabs were pushed up past its top and clipped (#1225).
+        // The scrollbar is hidden (globals.css): it would take its height out
+        // of the bar (--top-bar-height), squeezing the tabs or clipping their tops (#1225).
         display: "flex",
         alignItems: "stretch",
         background: "var(--bg-panel)",
         overflowX: "auto",
         overflowY: "hidden",
         flexShrink: 0,
-        height: 36,
+        height: "var(--top-bar-height)",
       }}
     >
       {tabs.map((tab) => {
@@ -59,8 +90,37 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
           <div
             key={tab.id}
             role="tab"
-            aria-label={tab.kind === "terminal" ? t("terminal.tabLabel", { name: tab.label }) : tab.kind === "agent" ? t("subagent.tabLabel", { name: tab.label }) : tab.label}
+            aria-label={tab.kind === "terminal" ? t("terminal.tabLabel", { name: tab.label }) : tab.kind === "agent" ? t("subagent.tabLabel", { name: tab.label }) : tab.kind === "side" ? t("sideChat.tabLabel") : tab.label}
             aria-selected={isActive}
+            draggable={Boolean(onReorderTab)}
+            onDragStart={(event) => {
+              if (!onReorderTab) return;
+              draggedId.current = tab.id;
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", tab.id);
+            }}
+            onDragOver={(event) => {
+              if (!draggedId.current || draggedId.current === tab.id) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              const rect = event.currentTarget.getBoundingClientRect();
+              const after = event.clientX >= rect.left + rect.width / 2;
+              setDropTarget((prev) => prev?.id === tab.id && prev.after === after ? prev : { id: tab.id, after });
+            }}
+            onDrop={(event) => {
+              if (!draggedId.current || draggedId.current === tab.id) return;
+              event.preventDefault();
+              event.stopPropagation();
+              const rect = event.currentTarget.getBoundingClientRect();
+              onReorderTab?.(draggedId.current, tab.id, event.clientX >= rect.left + rect.width / 2);
+              draggedId.current = null;
+              setDropTarget(null);
+            }}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+              setDropTarget((prev) => prev?.id === tab.id ? null : prev);
+            }}
+            onDragEnd={() => { draggedId.current = null; setDropTarget(null); }}
             tabIndex={isActive || (!activeTabId && tabs[0].id === tab.id) ? 0 : -1}
             onKeyDown={(event) => {
               if (event.target !== event.currentTarget) return;
@@ -103,6 +163,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
               flexShrink: 0,
               userSelect: "none",
               transition: "background 0.1s, color 0.1s",
+              boxShadow: dropTarget?.id === tab.id ? `inset ${dropTarget.after ? "-2px" : "2px"} 0 var(--accent)` : undefined,
             }}
           >
             <span style={{ flexShrink: 0, opacity: isActive ? 1 : 0.7, display: "flex", alignItems: "center" }}>
@@ -115,6 +176,10 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
               ) : tab.kind === "agent" ? (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" />
+                </svg>
+              ) : tab.kind === "side" ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M21 12a8 8 0 0 1-8 8H5.5a2 2 0 0 1-1.4-3.4A8 8 0 1 1 21 12z" />
                 </svg>
               ) : getFileIcon(tab.label, 13)}
             </span>
@@ -137,6 +202,8 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
               {tab.label}
             </span>
             <button
+              draggable={false}
+              onDragStart={(event) => event.stopPropagation()}
               disabled={tab.closing}
               onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
               onMouseEnter={() => setHoveredClose(tab.id)}

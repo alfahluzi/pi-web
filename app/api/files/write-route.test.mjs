@@ -59,5 +59,5 @@ test("PUT writes atomically preserving permission bits and returns the next revi
 });
 
 test("the text read response exposes the revision token", () => {
-  assert.match(source, /return NextResponse\.json\(\{ \.\.\.chunk, language, size: stat\.size, revision: fileRevision\(stat\) \}\)/);
+  assert.match(source, /return NextResponse\.json\(\{ \.\.\.chunk, language, size: stat\.size, revision: fileRevision\(stat\), mtime: stat\.mtime\.toISOString\(\) \}\)/);
 });
