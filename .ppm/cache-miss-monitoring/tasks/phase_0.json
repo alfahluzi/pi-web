@@ -1,0 +1,133 @@
+{
+  "phase": "phase_0",
+  "title": "Resolve SDK gate and freeze implementable contract",
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Document verified SDK limitations and integration boundary",
+      "agent": "explore",
+      "size": "S",
+      "files": [
+        ".ppm/cache-miss-monitoring/sdk-evidence.md"
+      ],
+      "details": {
+        "goal": "Record independently checked SDK evidence and define honest limit of the planned integration; no code or dependency changes.",
+        "contract": "Manifest and lock pin @earendil-works/pi-coding-agent 1.5.0; installed runtime is 1.2.0. Do not install, update, restart, or invent a target 1.2.0. Operator owns separate authorization/scheduling of dependency synchronization. The inspected installed SDK cannot establish target 1.5.0 behavior. Do not claim callback response status/headers provide usage or request IDs.",
+        "steps": [
+          "Inspect package manifest, lock entry, installed package metadata and relevant callback declarations/source; cite exact checked paths/symbols and limitation.",
+          "Document the open runtime gate and human-owned prerequisite: operator separately authorizes/schedules sync to already-pinned 1.5.0; this task cannot perform it or close gate.",
+          "If a real stream-entry wrapper is source-verified, describe only invocation-scoped request/assistant-response association without invented IDs; otherwise explicitly mark provider integration blocked and payload-only/uncorrelated behavior unavailable pending evidence.",
+          "Keep existing task IDs and separate SDK evidence from schema ownership."
+        ],
+        "verify": "Read-only source inspection; compare package.json, package-lock.json and installed package.json. Expected: version mismatch documented, no invented callback fields, no dependency/install actions.",
+        "done when": "Evidence note records verified facts, limitations, source references, and operator-owned prerequisite; implementation readiness is not implied."
+      },
+      "status": "completed",
+      "progress": [
+        {
+          "time": "2026-11-13T05:47:34Z",
+          "detail": "Verified manifest pin 1.5.0 (package.json:54), lock version 1.5.0 (package-lock.json:1119-1122), installed version 1.2.0 (node_modules/@earendil-works/pi-coding-agent/package.json:3; node read printed 1.2.0). Inspected installed ProviderConfig.streamSimple declaration and SDK docs; no verified 1.5.0 stream-entry/request-response association. Gate open; operator separately authorizes/schedules sync; no install/update/restart performed. Provider integration and payload-only/uncorrelated unavailable pending evidence. Evidence: .ppm/cache-miss-monitoring/sdk-evidence.md. Read-only source inspection; only owned evidence document written; task status unchanged."
+        },
+        {
+          "time": "2026-11-13T05:48:01Z",
+          "detail": "Orchestrator verified package metadata via Node: manifest=1.5.0, lock=1.5.0, installed=1.2.0. Read sdk-evidence.md and independently checked ProviderConfig.streamSimple declaration at types.d.ts:1424-1433. No source/dependency diff. Gate remains open; installed source cannot prove target semantics."
+        },
+        {
+          "time": "2026-11-13T06:31:17Z",
+          "detail": "2026-11-13 continuation: operator reports runtime alignment complete; independently verified installed pi-coding-agent now 1.5.0 matching manifest/lock. Read-only source inspection proves invocation-local stream/result association (pi-agent-core/dist/agent-loop.js:276-283; StreamFn types.d.ts:17), without SDK request/attempt IDs. Full frozen schema gate still BLOCKED: onPayload accepts unknown object (pi-ai/dist/types.d.ts:66-73), not exact bytes; schema prohibits arbitrary object serialization and generated IDs, and has no field for wrapper-local association. Invocation feasibility alone does not clear full contract. No implementation/dependency/service changes. Baseline tsc, lifecycle tests and targeted rpc-manager lint each exited 0. Need explicit contract amendment or exact-byte/identity source proof before phase_1 dispatch."
+        }
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "title": "Specify privacy schema, CLI, and retention contract",
+      "agent": "implement",
+      "size": "S",
+      "files": [
+        ".ppm/cache-miss-monitoring/schema.md"
+      ],
+      "details": {
+        "goal": "Define standalone bounded privacy and offline-analysis requirements; provider-specific matching remains owned by TASK-001 evidence and integration remains gated.",
+        "contract": "Do not claim exact request/attempt IDs or response association absent source proof. SDK onResponse status/headers are not usage or IDs. Never persist prompts, tools/results, endpoints, headers, filesystem paths or arbitrary model/config strings. Keep existing env PI_WEB_CACHE_MONITOR=1, fixed allowlists, explicit unknown semantics, byte-chunk-not-token claims, HMAC domain separation, and bounded offline CLI requirements from the current plan. Specify capture deletion and seven-day retention behavior explicitly.",
+        "steps": [
+          "Write schema fields, types, limits, validation, HMAC serialization and opt-in rules in schema.md without presupposing SDK integration fields.",
+          "Specify CLI command, bounded input/output, malformed-input behavior and labels; distinguish payload evidence from uncorrelated telemetry.",
+          "Document retention/deletion instructions and fail-open privacy constraints.",
+          "Record that implementation must remain gated until TASK-001 and operator authorization prerequisite are resolved."
+        ],
+        "verify": "Review schema.md for bounded values, privacy allowlist, exact CLI, deletion/retention instructions and honest unknown semantics; no source or dependency modifications.",
+        "done when": "Standalone schema contract is reviewable and does not conflict with SDK evidence ownership."
+      },
+      "status": "completed",
+      "progress": [
+        {
+          "time": "2026-11-13T05:47:20Z",
+          "detail": "Wrote .ppm/cache-miss-monitoring/schema.md with allowlisted bounded schema, validation/HMAC rules, opt-in and fail-open privacy constraints, exact bounded CLI contract, unknown/un-correlated labels, seven-day retention/deletion instructions, and explicit TASK-001/operator gates. Review assertions passed; no application source or dependency files modified."
+        },
+        {
+          "time": "2026-11-13T05:49:42Z",
+          "detail": "Revised only .ppm/cache-miss-monitoring/schema.md: corrected pre-gate language to block all capture/integration with conditional future fallback; fixed required/optional fields; froze HMAC tags, field ordering, length framing, raw-byte payload chunk serialization and rejection conditions; specified deterministic UTC-age/filesystem-mtime retention at recorder startup and before append/rotation, stopped/idle cleanup limits, and read-only analyzer refusal of expired/non-regular inputs. 15 targeted assertions passed. No other files edited; task status unchanged."
+        },
+        {
+          "time": "2026-11-13T05:50:21Z",
+          "detail": "Orchestrator verification after one targeted revision failed two contract consistency assertions: retention says capture age uses file creation time but cleanup/analyzer use modification time; MAC formula applies UTF8(field) to every field while chunk_index is binary uint32 and chunk_bytes are raw bytes. Opt-in, CLI invocation, required fields and implementation gate present. No application/dependency diff. Retry budget exhausted per execution flow; stop for correction authorization. TASK-007 remains blocked."
+        },
+        {
+          "time": "2026-11-13T06:02:33Z",
+          "detail": "User authorized targeted correction and phase_0 retry. Updated plan.md: retention uses oldest record timestamp_ms only, never filesystem clocks; running/idle expiry, startup removal and stopped/disabled limitation must be explicit; analyzer read-only. HMAC framing accepts bytes: text UTF-8, uint32 index big-endian, raw chunks unchanged, length-prefix tag and fields. Preserve all prior failure evidence. Only schema.md owned by this retry; no phase_1 or dependency actions."
+        },
+        {
+          "time": "2026-11-13T06:04:09Z",
+          "detail": "Corrected schema retention to oldest-record timestamp_ms with deterministic seven-day boundary, startup/append/periodic idle expiry, fail-open clock/cleanup handling, and read-only analyzer sharing clock; corrected HMAC framing to byte strings with strict UTF-8 text, binary uint32 index, and unchanged raw chunks. Reviewed against updated plan and SDK evidence; only schema.md edited; task status unchanged."
+        },
+        {
+          "time": "2026-11-13T06:05:56Z",
+          "detail": "Targeted schema-only revision: clarified expiry as oldest-timestamp deadline with deletion (rename/rotation never resets it), proactive scheduled deletion and >= boundary rejection, startup/each-append checks, periodic idle cleanup, future-timestamp rejection, clock rollback/suspension limits and resume checks before writes; clarified raw chunk bytes are not UTF-8 validated; mapped record incomplete=true to report incomplete_fingerprint without equality claims and clarified record outcomes vs report labels. Kept bounds and task status unchanged."
+        },
+        {
+          "time": "2026-11-13T06:06:24Z",
+          "detail": "Orchestrator read full revised schema and verified 10 contract assertions: byte framing, binary index/raw chunk handling, oldest-record retention clock/boundary, enabled startup/idle cleanup with stopped/suspended limitations, read-only analyzer, incomplete-report mapping, opt-in/privacy, CLI bounds and SDK gate. All passed. plan.md and sdk-evidence.md hashes unchanged during worker execution; no tracked source/dependency diff. Independent closing review remains TASK-007."
+        }
+      ]
+    },
+    {
+      "id": "TASK-007",
+      "title": "Review phase-zero evidence and schema gate",
+      "agent": "review",
+      "size": "S",
+      "files": [
+        ".ppm/cache-miss-monitoring/plan.md"
+      ],
+      "details": {
+        "goal": "Review phase-zero evidence and schema deliverables for consistency; do not modify SDK, code, or dependencies.",
+        "contract": "Review only. TASK-001 documents installed/runtime mismatch and limitations; TASK-002 defines schema, CLI, retention and deletion. SDK synchronization remains an operator-owned decision outside this task.",
+        "steps": [
+          "Check sdk-evidence.md against manifest, lock and installed package metadata.",
+          "Check schema.md privacy boundaries, value bounds, CLI rules, retention and deletion semantics.",
+          "Record whether evidence leaves implementation gate open; check plan/task references for mismatch."
+        ],
+        "verify": "Read-only document review; cite unresolved contradiction or confirm phase-zero artifacts consistent.",
+        "done when": "Review conclusion and any blockers recorded in plan.md; no code or dependency action taken."
+      },
+      "status": "completed",
+      "progress": [
+        {
+          "time": "2026-11-13T06:07:11Z",
+          "detail": "Independent read-only review: package.json:54 and package-lock.json:1119-1122 pin @earendil-works/pi-coding-agent 1.5.0; installed package metadata is 1.2.0, matching sdk-evidence.md. schema.md privacy, bounded values/CLI, approved oldest-record timestamp_ms retention, byte-framed MAC, deletion behavior, and open implementation gate are consistent with plan.md. BLOCKING mismatch: phase_1 TASK-005 execution gate in tasks/phase_1.json requires only phase_0 TASK-002, while plan.md §5-6 and §9 require human authorization/prerequisite before phase_1; TASK-005 could proceed without it. No edits/status changes; phase_1 remains unauthorized."
+        },
+        {
+          "time": "2026-11-13T06:08:08Z",
+          "detail": "Targeted re-audit of prior blocking finding: ppm task_get TASK-005 confirms mandatory supplemental gate explicitly overrides its incomplete Detail shorthand. It forbids TASK-005 and all phase_1 until all phase_0 tasks including TASK-007 complete, operator separately authorizes and completes runtime alignment to pinned SDK 1.5.0, and exact target source/types prove usable observation/association. plan.md Adjustment log independently records this override, says it is clarification only, and confirms TASK-005 stays todo with no phase_1 execution. Supplemental contract resolves gate mismatch without phase JSON rewrite or phase_1 execution. No remaining blocker from targeted finding; no artifact/status edits."
+        },
+        {
+          "time": "2026-11-13T06:08:21Z",
+          "detail": "Orchestrator independently read TASK-005 full Detail+Progress: mandatory override explicitly preserves all phase_0, separate human SDK alignment authorization/completion, and target-source proof gates. Independent targeted re-audit resolved blocker. plan_validate valid with zero warnings; git diff HEAD empty; sdk-evidence hash unchanged. TASK-002 schema contract checks passed; no source/dependency/service actions or phase_1 execution. Phase_0 closing review verified."
+        }
+      ],
+      "pre_request": [
+        "TASK-001",
+        "TASK-002"
+      ]
+    }
+  ]
+}

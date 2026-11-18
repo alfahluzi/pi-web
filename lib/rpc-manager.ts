@@ -3,7 +3,7 @@ import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
 import { existsSync, realpathSync, writeFileSync } from "fs";
-import { resolve } from "path";
+import { resolve, join } from "path";
 import { isDeepStrictEqual } from "util";
 import { validateAgentImages } from "./image-attachments";
 import { EXTENSION_REPORTED_CODE } from "./agent-client";
@@ -79,6 +79,7 @@ import { createSubagentSkillsBinding } from "./subagent-skills";
 import { isNestedToolExecutionEvent } from "./agent-event-wire";
 import { collectStartupIssues, extensionErrorMessage, limitStartupNotices, type StartupIssue } from "./startup-issues";
 import { collectLiveAssistantNotices, readShowCacheMissNotices, withSessionPrices } from "./transcript-notices-server";
+import { createCacheMonitor, type CacheMonitor, type InvocationHandle, type ProviderEnum, type Usage } from "./cache-monitor";
 import {
   appendClearedSessionToolSelection,
   appendSessionToolSelection,
@@ -220,6 +221,12 @@ type ExtensionCommandContextActionsLike = {
 // `debugSnapshot` is optional: a host built before a hot reload lacks it.
 type WrapperMcpHost = Pick<McpHost, "prepareForPrompt" | "dispose"> & Partial<Pick<McpHost, "debugSnapshot">>;
 
+/**
+ * Connects the session's cache monitor before a prompt starts a run and closes it once the SDK
+ * session is disposed (lib/cache-monitor.ts).
+ */
+type CacheObserver = Pick<CacheObservedRuntime, "close">;
+
 type AgentSessionWrapperOptions = {
   exactSystemPrompt?: () => string;
   chatOnly?: boolean;
@@ -227,6 +234,8 @@ type AgentSessionWrapperOptions = {
   suppressCompletionNotifications?: boolean;
   /** A subagent's wrapper: a run ended and nothing is left to do. */
   onDirectTurnSettled?: (aborted: boolean) => void;
+  /** Opt-in cache miss monitoring of this session only; closed after the SDK session is disposed. */
+  cacheObserver?: CacheObserver;
   /** Connects the session's MCP servers before a prompt starts a run, and lets go of them when it closes (lib/mcp-host.ts). */
   mcpHost?: WrapperMcpHost;
   /** Chat only: the extension-provided model the session wanted, named when a prompt finds no model. */
@@ -417,6 +426,242 @@ function isCompactionInProgressError(error: unknown): boolean {
 }
 
 // ============================================================================
+// Cache miss monitor (opt-in)
+// PI_WEB_CACHE_MONITOR=1 records prompt fingerprints and token usage for one
+// session through a per-session modelRuntime Proxy (lib/cache-monitor.ts). The
+// shared runtime and its prototype are never touched, and with the gate off
+// nothing is created: no monitor, no capture directory, no key.
+// ============================================================================
+
+export const CACHE_MONITOR_ENV_VAR = "PI_WEB_CACHE_MONITOR";
+
+/** The gate is the exact value "1"; anything else leaves the session unobserved. */
+export function isCacheMonitorEnabled(value: string | undefined = process.env[CACHE_MONITOR_ENV_VAR]): boolean {
+  return value === "1";
+}
+
+/** The one directory captures go to; nothing else is scanned or deleted. */
+export function cacheMonitorDirectory(agentDir: string = getAgentDir()): string {
+  return join(agentDir, "cache-monitor");
+}
+
+/** A monitor for one new session, or null when the gate is off or it cannot start. */
+export function createSessionCacheMonitor(): CacheMonitor | null {
+  if (!isCacheMonitorEnabled()) return null;
+  try {
+    return createCacheMonitor({ enabled: true, directory: cacheMonitorDirectory() });
+  } catch {
+    // Telemetry only: a monitor that cannot start must not affect generation.
+    return null;
+  }
+}
+
+function cacheMonitorProvider(provider: unknown): ProviderEnum {
+  const value = typeof provider === "string" ? provider.toLowerCase() : "";
+  if (value.includes("openai")) return "openai";
+  if (value.includes("anthropic")) return "anthropic";
+  if (value.includes("google") || value.includes("gemini") || value.includes("vertex")) return "google";
+  return "other";
+}
+
+const CACHE_MONITOR_TOKEN_MAX = 2_147_483_647;
+
+/** Only the four SDK token counters; cost, totals and content stay unread. */
+function cacheMonitorUsage(usage: unknown): Usage | null {
+  if (!usage || typeof usage !== "object") return null;
+  const counter = (key: string): number | null => {
+    try {
+      const value = (usage as Record<string, unknown>)[key];
+      return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= CACHE_MONITOR_TOKEN_MAX
+        ? value as number
+        : null;
+    } catch {
+      return null;
+    }
+  };
+  return {
+    input_tokens: counter("input"),
+    output_tokens: counter("output"),
+    cache_read_tokens: counter("cacheRead"),
+    cache_write_tokens: counter("cacheWrite"),
+  };
+}
+
+/** What one streamSimple call observed: its live handle and its successful payload count. */
+type CacheInvocationObservation = { handle: InvocationHandle | null; payloadCount: number };
+
+export type CacheObservedRuntime = {
+  /** The per-session runtime the SDK gets; the shared runtime stays as it was. */
+  readonly runtime: ModelRuntime;
+  /** This session's own stable local stream id, never an SDK or provider id. */
+  readonly localStreamId: string;
+  /** Closes the monitor with an explicit drain policy; safe to call more than once. */
+  close(): Promise<void>;
+};
+
+/**
+ * Wraps `streamSimple` for one session only. Each call gets a local invocation identity, the
+ * options object is cloned so `onPayload` observes the effective payload, and the original
+ * stream is returned untouched. Every observer failure is swallowed: telemetry never reaches
+ * generation. `null` means the gate is off (or the monitor failed to start) and nothing wraps.
+ */
+export function createCacheObservedRuntime(monitor: CacheMonitor | null, runtime: ModelRuntime): CacheObservedRuntime | null {
+  if (!monitor || monitor.localEpochId === null) return null;
+  const localStreamId = randomUUID();
+  let invocationIndex = 0;
+  let closed = false;
+
+  const markUnknown = (observation: CacheInvocationObservation, reason: Parameters<CacheMonitor["markUnknown"]>[1]) => {
+    const handle = observation.handle;
+    if (!handle) return;
+    observation.handle = null;
+    try {
+      monitor.markUnknown(handle, reason);
+    } catch {
+      // Observer handlers swallow their own errors.
+    }
+  };
+
+  const observePayload = (observation: CacheInvocationObservation, payload: unknown) => {
+    if (!observation.handle) return;
+    observation.payloadCount += 1;
+    // More than one payload observation means an unknown retry relation: never pair it.
+    if (observation.payloadCount > 1) {
+      markUnknown(observation, "retry_ambiguous");
+      return;
+    }
+    try {
+      monitor.recordRequest(observation.handle, { payload });
+    } catch {
+      markUnknown(observation, "unmatched");
+    }
+  };
+
+  const observeResult = (observation: CacheInvocationObservation, result: unknown) => {
+    const handle = observation.handle;
+    if (!handle) return;
+    observation.handle = null;
+    try {
+      const stopReason = (result as { stopReason?: unknown } | null)?.stopReason;
+      // Both done and error events fulfill result(); only these three finish a turn.
+      if (stopReason !== "stop" && stopReason !== "length" && stopReason !== "toolUse") {
+        monitor.markUnknown(handle, "unmatched");
+        return;
+      }
+      if (observation.payloadCount === 0) {
+        monitor.markUnknown(handle, "telemetry_gap");
+        return;
+      }
+      if (observation.payloadCount > 1) {
+        monitor.markUnknown(handle, "retry_ambiguous");
+        return;
+      }
+      monitor.recordResponse(handle, { usage: cacheMonitorUsage((result as { usage?: unknown }).usage) });
+    } catch {
+      // Observer handlers swallow their own errors.
+    }
+  };
+
+  const observeStreamResult = (observation: CacheInvocationObservation, stream: unknown) => {
+    if (!observation.handle) return;
+    let pending: unknown;
+    try {
+      const result = (stream as { result?: unknown } | null)?.result;
+      if (typeof result !== "function") {
+        markUnknown(observation, "unmatched");
+        return;
+      }
+      // Observe only: the stream, its iterator and its result are the caller's.
+      pending = Reflect.apply(result, stream, []);
+    } catch {
+      markUnknown(observation, "unmatched");
+      return;
+    }
+    if (!pending || typeof (pending as PromiseLike<unknown>).then !== "function") {
+      markUnknown(observation, "unmatched");
+      return;
+    }
+    try {
+      void (pending as Promise<unknown>)
+        .then(
+          (result) => observeResult(observation, result),
+          () => markUnknown(observation, "unmatched"),
+        )
+        .catch(() => undefined);
+    } catch {
+      markUnknown(observation, "unmatched");
+    }
+  };
+
+  const observed = new Proxy(runtime, {
+    get(target, key) {
+      if (key === "streamSimple") {
+        const original = Reflect.get(target, key, target);
+        return function cacheObservedStreamSimple(this: unknown, ...args: unknown[]) {
+          const model = args[0] as { provider?: unknown; id?: unknown } | null;
+          const observation: CacheInvocationObservation = { handle: null, payloadCount: 0 };
+          try {
+            observation.handle = monitor.beginInvocation({
+              localStreamId,
+              invocationIndex: invocationIndex++, // Advances even when stream creation throws.
+              provider: cacheMonitorProvider(model?.provider),
+              modelId: typeof model?.id === "string" ? model.id : null,
+            });
+          } catch {
+            observation.handle = null;
+          }
+          const passed = args[2];
+          const originalOptions = passed && typeof passed === "object" ? passed as Record<string, unknown> : undefined;
+          const originalOnPayload = originalOptions?.onPayload;
+          args[2] = {
+            ...(originalOptions ?? {}),
+            async onPayload(...payloadArgs: unknown[]) {
+              // Original callback: once, original arguments, awaited; its value or rejection passes through.
+              const value = typeof originalOnPayload === "function"
+                ? await Reflect.apply(originalOnPayload, originalOptions, payloadArgs)
+                : undefined;
+              try {
+                observePayload(observation, value === undefined ? payloadArgs[0] : value);
+              } catch {
+                // Observer handlers swallow their own errors.
+              }
+              return value;
+            },
+          };
+          let stream: unknown;
+          try {
+            stream = Reflect.apply(original as (...callArgs: unknown[]) => unknown, target, args);
+          } catch (error) {
+            markUnknown(observation, "unmatched");
+            throw error;
+          }
+          observeStreamResult(observation, stream);
+          return stream;
+        };
+      }
+      // Every other property goes to the shared runtime itself; function values are bound to
+      // it so methods with private fields keep their receiver.
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  return {
+    runtime: observed,
+    localStreamId,
+    close() {
+      if (closed) return Promise.resolve();
+      closed = true;
+      try {
+        return monitor.close({ drain: true }).catch(() => undefined);
+      } catch {
+        return Promise.resolve();
+      }
+    },
+  };
+}
+
+// ============================================================================
 // AgentSessionWrapper
 // Wraps AgentSession with the same interface the rest of the app expects
 // ============================================================================
@@ -468,6 +713,8 @@ export class AgentSessionWrapper {
   private readonly mcpHost?: WrapperMcpHost;
   private readonly chatOnlyExtensionModel?: { provider: string; id: string };
   private readonly sideChat: boolean;
+  private readonly cacheObserver?: CacheObserver;
+  private cacheObserverClosed: Promise<void> | null = null;
   private mcpHostDisposed = false;
   // The MCP wait of the prompt being admitted; Stop ends it.
   private mcpPromptWait: { controller: AbortController; done: Promise<void> } | null = null;
@@ -517,6 +764,7 @@ export class AgentSessionWrapper {
     this.mcpHost = options.mcpHost;
     this.chatOnlyExtensionModel = options.chatOnlyExtensionModel;
     this.sideChat = options.sideChat === true;
+    this.cacheObserver = options.cacheObserver;
     this.startupNotices = options.startupIssues ? [] : null;
     for (const issue of options.startupIssues ?? []) this.notifyIssue(issue);
   }
@@ -1988,6 +2236,23 @@ export class AgentSessionWrapper {
     }
   }
 
+  /**
+   * Closes this session's cache monitor with an explicit drain policy once the SDK session can
+   * no longer generate. destroy() and shutdown() share the one close, so nothing captures after it.
+   */
+  private closeCacheObserver(): Promise<void> {
+    if (!this.cacheObserverClosed) {
+      let pending: Promise<void>;
+      try {
+        pending = this.cacheObserver ? this.cacheObserver.close() : Promise.resolve();
+      } catch {
+        pending = Promise.resolve();
+      }
+      this.cacheObserverClosed = pending.catch(() => undefined);
+    }
+    return this.cacheObserverClosed;
+  }
+
   destroy(): void {
     if (!this._alive) return;
     this._alive = false;
@@ -2016,6 +2281,8 @@ export class AgentSessionWrapper {
       try {
         this.inner.dispose();
       } finally {
+        // After dispose, so no generation can start a capture once the monitor closes.
+        void this.closeCacheObserver();
         this.onDestroyCallback?.();
         // Here rather than in the registry's onDestroy callback, which a replacement swaps out.
         recordSessionClosed(this);
@@ -2075,6 +2342,8 @@ export class AgentSessionWrapper {
         }
       } finally {
         this.destroy();
+        // Shutdown settles only after the monitor drained, so callers see a closed capture.
+        await this.closeCacheObserver();
       }
     })();
     return this.shutdownPromise;
@@ -3820,8 +4089,11 @@ export async function startRpcSession(
         ? findDeferredModel(services.modelRuntime, defaultProvider, defaultModelId)
         : undefined)
       : undefined;
-    const { session: inner, modelFallbackMessage } = await createAgentSessionFromServices({
-      services,
+    // Opt-in cache miss monitoring: one Proxy per session around the shared runtime, so only
+    // this session's streamSimple calls are observed and the shared runtime is never mutated.
+    const cacheObserved = createCacheObservedRuntime(createSessionCacheMonitor(), services.modelRuntime);
+    const created = await createAgentSessionFromServices({
+      services: cacheObserved ? { ...services, modelRuntime: cacheObserved.runtime } : services,
       sessionManager,
       ...(startupModel ? { model: startupModel } : {}),
       ...(initial?.thinkingLevel ? { thinkingLevel: initial.thinkingLevel } : {}),
@@ -3829,7 +4101,12 @@ export async function startRpcSession(
       ...(subagentResources
         ? subagentToolOptions(subagentResources)
         : toolsOption !== undefined ? { tools: toolsOption } : {}),
+    }).catch((error: unknown) => {
+      // No wrapper exists to close the monitor when the SDK refuses to build the session.
+      void cacheObserved?.close();
+      throw error;
     });
+    const { session: inner, modelFallbackMessage } = created;
 
     // A pinned selection replaces only the coding tools of the SDK's initial loadout, which
     // already holds the extension tools pi activates on registration and whatever
@@ -3864,6 +4141,7 @@ export async function startRpcSession(
     const wrapper = new AgentSessionWrapper(inner, {
       exactSystemPrompt,
       chatOnly,
+      ...(cacheObserved ? { cacheObserver: cacheObserved } : {}),
       onAgentRunComplete: (completedSessionId, sessionName) => {
         void notifySessionComplete(completedSessionId, sessionName).catch((error) => {
           console.error("[pi-web] failed to send completion push:", error instanceof Error ? error.message : error);
