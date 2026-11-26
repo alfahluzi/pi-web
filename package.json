@@ -1,6 +1,6 @@
 {
   "name": "@agegr/pi-web",
-  "version": "0.17.0",
+  "version": "0.17.0-0.0",
   "description": "Web UI for the pi coding agent",
   "homepage": "https://github.com/agegr/pi-web#readme",
   "repository": {
@@ -11,10 +11,29 @@
     "url": "https://github.com/agegr/pi-web/issues"
   },
   "license": "MIT",
-  "engines": { "node": ">=22.19.0" },
-  "browserslist": ["chrome 111", "edge 111", "firefox 111", "safari 16.2", "ios_saf 16.2"],
-  "bin": { "pi-web": "bin/pi-web.js" },
-  "files": ["bin", ".next", "!.next/cache", "!.next/dev", "!.next/**/*.js.map", "public", "next.config.ts", "package.json"],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "browserslist": [
+    "chrome 111",
+    "edge 111",
+    "firefox 111",
+    "safari 16.2",
+    "ios_saf 16.2"
+  ],
+  "bin": {
+    "pi-web": "bin/pi-web.js"
+  },
+  "files": [
+    "bin",
+    ".next",
+    "!.next/cache",
+    "!.next/dev",
+    "!.next/**/*.js.map",
+    "public",
+    "next.config.ts",
+    "package.json"
+  ],
   "scripts": {
     "postinstall": "node bin/prepare-terminal.js",
     "dev": "next dev -H 127.0.0.1 -p 30141",
