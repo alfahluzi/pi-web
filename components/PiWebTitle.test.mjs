@@ -89,16 +89,21 @@ test("the brand's text sits in the chevron column and is never cut at the sideba
 
   // At the sidebar's minimum (its line off), beside New's + and the search
   // (36px cells each), "Pi Web" fits in its 15px code type (0.6em a
-  // character), and the versions in the 11px of data-fit 2.
+  // character), and the versions in the 11px of data-fit 2 — or the fork's
+  // longer ones in the smaller type that state gives them.
   assert.match(brand, /(?:^|\s)font-family: var\(--font-mono\);/);
   assert.match(brand, /(?:^|\s)font-size: 15px;/);
   assert.match(css, /\.sidebar-header\[data-fit="2"\] \.sidebar-brand \{\s*font-size: 11px;\s*\}/);
+  const versionFontSize = Number(
+    css.match(/\.sidebar-header\[data-fit="2"\] \.sidebar-brand\.is-version \{\s*font-size: (\d+)px;\s*\}/)?.[1],
+  );
+  assert.ok(versionFontSize > 0 && versionFontSize <= 11, `the versions' type in data-fit 2: ${versionFontSize}px`);
   const room = SIDEBAR_MIN_WIDTH - 1 - 36 - 36;
   const box = (text, fontSize) => marginLeft + 2 * paddingLeft + text.length * 0.6 * fontSize;
   assert.ok(box(BRAND_TEXT, 15) <= room, "the brand at 15px");
   const piPackage = JSON.parse(await readFile(new URL("../node_modules/@earendil-works/pi-coding-agent/package.json", import.meta.url), "utf8"));
   // Today's versions, with room for a longer one.
   const versions = brandVersionText(packageJson.version, piPackage.version);
-  assert.ok(box(versions, 11) <= room, `${versions} at 11px`);
-  assert.ok(box(`${versions}0`, 11) <= room, "and a digit more");
+  assert.ok(box(versions, versionFontSize) <= room, `${versions} at ${versionFontSize}px`);
+  assert.ok(box(`${versions}0`, versionFontSize) <= room, "and a digit more");
 });

@@ -1042,7 +1042,9 @@ a.session-tree-main {
    gives way first, and on a row too narrow for the versions they take the
    sidebar's meta size (data-fit 2, which only they reach: "Pi Web" fits
    beside the two cells at the sidebar's 180px minimum, and at 11px so do
-   the versions with a digit to spare). */
+   the versions with a digit to spare). The fork's versions carry a
+   "-<a>.<b>" counter suffix, four characters the 11px row cannot hold, so
+   in that state they drop to 9px: 16 characters and a digit to spare. */
 .sidebar-brand {
   flex: none;
   align-self: center;
@@ -1111,6 +1113,10 @@ a.session-tree-main {
 
 .sidebar-header[data-fit="2"] .sidebar-brand {
   font-size: 11px;
+}
+
+.sidebar-header[data-fit="2"] .sidebar-brand.is-version {
+  font-size: 9px;
 }
 
 .sidebar-header[data-fit="1"] .sidebar-new-label,
