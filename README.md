@@ -1,5 +1,7 @@
 # Pi Web
 
+This repository ([alfahluzi/pi-web](https://github.com/alfahluzi/pi-web)) is an unofficial fork of [agegr/pi-web](https://github.com/agegr/pi-web). To run the fork, see [Install This Fork](#install-this-fork); the fork's changes are listed in [LOCAL-CHANGES.md](./LOCAL-CHANGES.md).
+
 [中文文档](./docs/README.zh-CN.md) | [日本語](./docs/README.ja.md) | [Русский](./docs/README.ru.md)
 
 Local browser UI for the [pi coding agent](https://github.com/earendil-works/pi). Pi Web uses the same local configuration and session files as pi, so you can browse and resume conversations, run agent turns, configure models and resources, and inspect project files from a browser.
@@ -17,9 +19,55 @@ Local browser UI for the [pi coding agent](https://github.com/earendil-works/pi)
 - **Web-based configuration**: manage provider login and API keys, models, model tests, plugin packages, and skills without leaving Pi Web.
 - **English, Simplified Chinese, and Traditional Chinese UI**: Pi Web follows the browser language initially. Change it under Settings → General → Language.
 
-## Quick Start
+## Install This Fork
 
-Pi Web requires Node.js 22.19.0 or newer. Check your version with `node --version`, then run:
+The published npm package `@agegr/pi-web` and the Docker image `ghcr.io/agegr/pi-web` belong to upstream. `npx @agegr/pi-web@latest`, `npm install -g @agegr/pi-web@latest` and the published image all install upstream Pi Web, without this fork's changes. Install the fork from a checkout instead.
+
+Pi Web requires Node.js 22.19.0 or newer (`node --version`). `custom` is the branch this fork runs, so clone that branch:
+
+```bash
+git clone --branch custom https://github.com/alfahluzi/pi-web.git
+cd pi-web
+npm ci
+npm run dev
+```
+
+Open [http://127.0.0.1:30141](http://127.0.0.1:30141). `npm run dev` is the development server; it serves the checkout as it is, with no build step.
+
+### Production server from the checkout
+
+Build once, then start:
+
+```bash
+npm run build
+npm start
+```
+
+`npm start` serves the built `.next` output on port 30141. Do not run `npm run build` while `npm run dev` is running: both write to `.next/` and the development server loses its graph.
+
+### The pi-web command
+
+To get the `pi-web` CLI from this checkout instead of from npm, build it and link it globally:
+
+```bash
+npm run build
+npm install -g .
+pi-web --help
+```
+
+`pi-web update` and the update check in the UI follow the upstream npm package, so they do not update a git checkout. Update the fork with git and rebuild:
+
+```bash
+pi-web stop
+git pull
+npm ci
+npm run build
+pi-web
+```
+
+### Upstream npm package
+
+Everything in this subsection installs upstream Pi Web, not this fork. Check your version with `node --version`, then run:
 
 ```bash
 npx @agegr/pi-web@latest
