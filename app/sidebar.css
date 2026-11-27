@@ -15,6 +15,10 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  /* One step in per nesting level of the path tree. A row sets
+     --session-tree-depth (components/SessionTree.tsx rowStyle), so only its
+     text moves in: the hover box keeps the same width at every level. */
+  --session-tree-indent: 12px;
 }
 
 .session-tree-message {
@@ -187,7 +191,7 @@
 .session-tree-session {
   right: var(--session-tree-inset-right);
   left: var(--session-tree-inset-left);
-  padding: 0 4px 0 20px;
+  padding: 0 4px 0 calc(20px + var(--session-tree-depth, 0) * var(--session-tree-indent));
   border-radius: 7px;
   cursor: pointer;
   overflow: hidden;
@@ -621,7 +625,7 @@ a.session-tree-main {
   gap: 3px;
   min-width: 0;
   height: 100%;
-  padding: 0 0 0 5px;
+  padding: 0 0 0 calc(5px + var(--session-tree-depth, 0) * var(--session-tree-indent));
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
@@ -645,6 +649,77 @@ a.session-tree-main {
   flex: none;
   margin-left: 2px;
   color: var(--text-dim);
+}
+
+/* The folder a pinned project sits in, muted after its name: the tree is
+   where a project's place shows, and pinning pulls it out of it. */
+.session-tree-group-folder {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  margin-left: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+
+/* A directory above the projects of the path tree: one step lighter than a
+   project's header (a folder groups, a project holds sessions), its chevron
+   in the same column, and no actions of its own. */
+.session-tree-folder {
+  right: var(--session-tree-inset-right);
+  left: var(--session-tree-inset-left);
+  border-radius: 7px;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.session-tree-folder:hover {
+  background: var(--bg-hover);
+}
+
+.session-tree-folder-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px 0 calc(5px + var(--session-tree-depth, 0) * var(--session-tree-indent));
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.session-tree-folder:hover .session-tree-folder-toggle {
+  color: var(--text-muted);
+}
+
+.session-tree-folder-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The folder a pinned project was pulled out of: the pin says where it went. */
+.session-tree-folder-pin {
+  flex: none;
+  margin-left: 3px;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+/* Folded: how many projects it hides, before their activity. */
+.session-tree-folder-count {
+  flex: none;
+  margin-left: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 400;
 }
 
 .session-tree-summary {
@@ -750,7 +825,7 @@ a.session-tree-main {
 /* In the text column, with the session titles. */
 .session-tree-group-empty,
 .session-tree-more {
-  padding-left: calc(var(--session-tree-inset-left) + 20px);
+  padding-left: calc(var(--session-tree-inset-left) + 20px + var(--session-tree-depth, 0) * var(--session-tree-indent));
   color: var(--text-dim);
   font-size: 11px;
 }

@@ -217,7 +217,7 @@ test("a mouse drag starts after a few pixels, follows the pointer and drops next
   const view = tree.hook.result.view;
   assert.equal(view.phase, "dragging");
   assert.equal(view.projectKey, "/a");
-  assert.deepEqual(view.source, { key: "/a", pinned: false, top: 8, bottom: 36, gapAbove: 8, gapBelow: 8 });
+  assert.deepEqual(view.source, { key: "/a", pinned: false, parentKey: null, top: 8, bottom: 36, gapAbove: 8, gapBelow: 8 });
   assert.equal(view.drop, null, "still over itself");
   assert.ok(element.captured.has(1), "the header holds the pointer");
   // The ghost is placed in the tree's box, its left edge 4px in from the

@@ -8,7 +8,7 @@ import { newSessionDeepLink, sessionDeepLink } from "@/lib/session-links";
 import { getProjectActivity, getRecentProjects } from "@/lib/project-groups";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import {
-  adjacentProjectMove,
+  adjacentSiblingMove,
   archivedFamilyIds,
   buildArchiveRows,
   buildSessionTree,
@@ -93,6 +93,7 @@ import {
 } from "@/lib/unread-markers";
 import { isPageAttended, subscribePageAttention } from "@/lib/user-attention";
 import { useFilesPlacement } from "@/hooks/useFilesPlacement";
+import { useSidebarLayout } from "@/hooks/useSidebarPathTree";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useResizablePanel } from "@/hooks/useResizablePanel";
@@ -606,6 +607,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
   // way (useFilesPlacement's server snapshot).
   const filesPlacement = useFilesPlacement();
   const stacked = !isMobile && filesPlacement === "below";
+  // The projects nested by their paths (Settings › General, per browser);
+  // flat is the one list of groups.
+  const pathTree = useSidebarLayout() === "tree";
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("sessions");
   const [filesCollapsed, setFilesCollapsed] = useState(false);
   const sessionsTabRef = useRef<HTMLButtonElement>(null);
@@ -1594,7 +1598,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
     groupExpansion: shownGroupExpansion,
     moreShown,
     pinnedCollapsed,
-  }), [allSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, shownGroupExpansion, moreShown, pinnedCollapsed]);
+    pathTree,
+  }), [allSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, shownGroupExpansion, moreShown, pinnedCollapsed, pathTree]);
   // Built while the archive view is rendered, its way out included: it
   // leaves as it was, not empty.
   const archiveMounted = archiveMotion.archiveMounted;
@@ -2110,12 +2115,19 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
       setPinnedCollapsed(false);
       savePinnedCollapsed(false);
     }
-    if (location.unfoldGroup) {
+    // The path tree's folders above it too: a folded one hides the row as a
+    // folded group does.
+    const foldedFolders = (model.ancestorFolders[location.projectKey] ?? [])
+      .filter((folderKey) => shownGroupExpansion[folderKey] === false);
+    if (location.unfoldGroup || foldedFolders.length > 0) {
       const next = { ...groupExpansion };
       // Re-inserted, so the choice counts as the newest one kept.
-      delete next[location.projectKey];
-      next[location.projectKey] = true;
-      saveGroupChoices(next, [location.projectKey]);
+      const opened = location.unfoldGroup ? [location.projectKey, ...foldedFolders] : foldedFolders;
+      for (const key of opened) {
+        delete next[key];
+        next[key] = true;
+      }
+      saveGroupChoices(next, opened);
     }
     treeRevealIdRef.current += 1;
     setTreeReveal({
@@ -2125,7 +2137,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
       block: "nearest",
       ...(focus?.sessionId === sessionId ? { takeFocusFrom: focus.takeFocusFrom } : {}),
     });
-  }, [selectedSessionId, allSessions, uiState, runningSessionIds, shownGroupExpansion, groupExpansion, pinnedCollapsed, loading, uiStateLoaded, sidebarPrefsRestored, mainTreeShown, saveGroupChoices]);
+  }, [selectedSessionId, allSessions, uiState, runningSessionIds, shownGroupExpansion, groupExpansion, pinnedCollapsed, loading, uiStateLoaded, sidebarPrefsRestored, mainTreeShown, saveGroupChoices, model.ancestorFolders]);
 
   // Fork (the row menu's F): the server copies the family's current branch
   // into a new session beside it (POST /api/sessions/[id]/fork) and leaves
@@ -2466,16 +2478,23 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
     handleSelectSessionFromList(family.root);
   }, [handleSelectSessionFromList]);
 
-  // Every group at once: a group's menu, or Alt+click on its header.
+  // Every group and folder at once: a group's menu, or Alt+click on a header.
   // Re-inserted, so the choices count as the newest ones kept.
-  const setAllGroupsExpanded = useCallback((expanded: (project: SidebarProject) => boolean) => {
+  const setAllGroupsExpanded = useCallback((
+    expanded: (project: SidebarProject) => boolean,
+    folderOpen: (folderKey: string) => boolean,
+  ) => {
     const next = { ...groupExpansion };
     for (const project of model.projects) {
       delete next[project.key];
       next[project.key] = expanded(project);
     }
+    for (const folder of model.folders) {
+      delete next[folder.key];
+      next[folder.key] = folderOpen(folder.key);
+    }
     saveGroupChoices(next, null);
-  }, [groupExpansion, model.projects, saveGroupChoices]);
+  }, [groupExpansion, model.folders, model.projects, saveGroupChoices]);
 
   // Expanding or collapsing a group only changes the view: it never moves the
   // cwd (picking a project does that, in the files tab). With Alt, every
@@ -2485,7 +2504,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
     if (!project) return;
     const expanded = !isGroupExpanded(project, shownGroupExpansion);
     if (all) {
-      setAllGroupsExpanded(() => expanded);
+      setAllGroupsExpanded(() => expanded, () => expanded);
       return;
     }
     const next = { ...groupExpansion };
@@ -2494,6 +2513,24 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
     next[projectKey] = expanded;
     saveGroupChoices(next, [projectKey]);
   }, [groupExpansion, projectByKey, saveGroupChoices, setAllGroupsExpanded, shownGroupExpansion]);
+
+  // A folder of the path tree: its own fold only, or with Alt every folder
+  // follows it. A folder nobody chose for is open by what it holds, so the
+  // first click saves the opposite of what is on screen.
+  const handleToggleFolder = useCallback((folderKey: string, all: boolean) => {
+    const row = model.rows.find((item) => item.kind === "folder" && item.key === folderKey);
+    if (row?.kind !== "folder") return;
+    const expanded = !row.expanded;
+    if (all) {
+      setAllGroupsExpanded(() => expanded, () => expanded);
+      return;
+    }
+    const next = { ...groupExpansion };
+    // Re-inserted, so the choice counts as the newest one kept.
+    delete next[folderKey];
+    next[folderKey] = expanded;
+    saveGroupChoices(next, [folderKey]);
+  }, [groupExpansion, model.rows, saveGroupChoices, setAllGroupsExpanded]);
 
   // The window a click opens is the one its row offers now (`nextShown`):
   // decided at the click, by position, so a row that turns selected, unread
@@ -2577,9 +2614,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
   const groupMenuItems = (project: SidebarProject, olderCount: number): SidebarMenuItem[] => {
     const archivedCount = archiveIndex.countByProject.get(project.key) ?? 0;
     const deletable = familiesToDelete(treeSelectionInput, project.key);
-    // Within the project's band; disabled at its edges.
-    const up = adjacentProjectMove(model.projects, project.key, "up");
-    const down = adjacentProjectMove(model.projects, project.key, "down");
+    // Within its band (or its folder in the tree); disabled at its edges.
+    const up = adjacentSiblingMove(model.siblingProjects, project.key, "up");
+    const down = adjacentSiblingMove(model.siblingProjects, project.key, "down");
     const nameItems = projectNameMenuEntries(project).map((id): SidebarMenuItem => (id === "rename-project" ? {
       type: "item",
       id,
@@ -2654,16 +2691,22 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
         id: "collapse-others",
         label: t("sidebar.collapseOtherGroups"),
         icon: <ChevronIcon />,
-        disabled: model.projects.every((other) => isGroupExpanded(other, shownGroupExpansion) === (other.key === project.key)),
-        onSelect: () => setAllGroupsExpanded((other) => other.key === project.key),
+        disabled: model.projects.every((other) => isGroupExpanded(other, shownGroupExpansion) === (other.key === project.key))
+          && model.folders.every((folder) => folder.expanded === (model.ancestorFolders[project.key] ?? []).includes(folder.key)),
+        onSelect: () => setAllGroupsExpanded(
+          (other) => other.key === project.key,
+          // Its own path stays open, so the project is still on screen.
+          (folderKey) => (model.ancestorFolders[project.key] ?? []).includes(folderKey),
+        ),
       },
       {
         type: "item",
         id: "expand-all",
         label: t("sidebar.expandAllGroups"),
         icon: <ChevronIcon className="sidebar-icon-down" />,
-        disabled: model.projects.every((other) => isGroupExpanded(other, shownGroupExpansion)),
-        onSelect: () => setAllGroupsExpanded(() => true),
+        disabled: model.projects.every((other) => isGroupExpanded(other, shownGroupExpansion))
+          && model.folders.every((folder) => folder.expanded),
+        onSelect: () => setAllGroupsExpanded(() => true, () => true),
       },
       { type: "separator", id: "separator-sessions" },
       {
@@ -2899,6 +2942,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
     activeMenuRowKey,
     onSelectFamily: handleSelectFamily,
     onToggleGroup: handleToggleGroup,
+    onToggleFolder: handleToggleFolder,
     onShowMore: handleShowMore,
     onShowLess: handleShowLess,
     onTogglePinned: handleTogglePinned,

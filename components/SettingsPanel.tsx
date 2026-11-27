@@ -16,6 +16,7 @@ import {
 } from "@/hooks/useChatAppearance";
 import { useEnterSendMode, setEnterSendMode } from "@/hooks/useEnterSendMode";
 import { useFilesPlacement, setFilesPlacement } from "@/hooks/useFilesPlacement";
+import { useSidebarLayout, setSidebarLayout } from "@/hooks/useSidebarPathTree";
 import { sendAgentCommand } from "@/lib/agent-client";
 import type { ProjectTrustStatus, ToolSettingsResponse } from "@/lib/api-types";
 import { SETTINGS_BUILTIN_TOOLS } from "@/lib/tool-presets";
@@ -86,6 +87,7 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
   const { width: chatContentWidth, setWidth: setChatContentWidth, fontSize, setFontSize } = useChatAppearance();
   const enterSendMode = useEnterSendMode();
   const filesPlacement = useFilesPlacement();
+  const sidebarLayout = useSidebarLayout();
   const [shellSettings, setShellSettings] = useState<ToolSettingsResponse | null>(null);
   const [shellSaving, setShellSaving] = useState(false);
   const [shellError, setShellError] = useState<string | null>(null);
@@ -448,6 +450,41 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
           </div>
         </div>
         <p id="settings-files-placement-description" className="settings-general-description">{t("settings.filesPlacementDescription")}</p>
+        <div className="settings-chat-options">
+          <div
+            className="settings-chat-option settings-chat-switch-option"
+            role="radiogroup"
+            aria-label={t("settings.sidebarLayout")}
+            aria-describedby="settings-sidebar-layout-description"
+          >
+            <span>{t("settings.sidebarLayout")}</span>
+            <div className="settings-send-mode-options">
+              <label className="settings-send-mode-option">
+                <input
+                  type="radio"
+                  name="sidebar-layout"
+                  value="flat"
+                  checked={sidebarLayout === "flat"}
+                  onChange={() => setSidebarLayout("flat")}
+                  className="sr-only"
+                />
+                <span className="settings-send-mode-label">{t("settings.sidebarLayoutFlat")}</span>
+              </label>
+              <label className="settings-send-mode-option">
+                <input
+                  type="radio"
+                  name="sidebar-layout"
+                  value="tree"
+                  checked={sidebarLayout === "tree"}
+                  onChange={() => setSidebarLayout("tree")}
+                  className="sr-only"
+                />
+                <span className="settings-send-mode-label">{t("settings.sidebarLayoutTree")}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <p id="settings-sidebar-layout-description" className="settings-general-description">{t("settings.sidebarLayoutDescription")}</p>
       </section>
 
       {shellSettings && (

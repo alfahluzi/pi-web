@@ -42,6 +42,7 @@ const defaults = {
   activeMenuRowKey: null,
   onSelectFamily: noop,
   onToggleGroup: noop,
+  onToggleFolder: noop,
   onShowMore: noop,
   onShowLess: noop,
   onTogglePinned: noop,
@@ -111,6 +112,23 @@ function groupRow(extra = {}, projectExtra = {}) {
 
 const footer = [{ kind: "footer-open", key: "footer-open" }];
 
+function folderRow(extra = {}) {
+  return {
+    kind: "folder",
+    key: "dir:/work/code",
+    path: "/work/code",
+    label: "code",
+    depth: 0,
+    expanded: false,
+    projectCount: 3,
+    pinnedAbove: false,
+    running: 0,
+    awaiting: 0,
+    unread: 0,
+    ...extra,
+  };
+}
+
 test("the pinned header toggles the section and shows activity dots only while collapsed", () => {
   const collapsed = rowMarkup(render({
     rows: [{ kind: "pinned-header", key: "pinned-header", count: 3, collapsed: true, running: 1, awaiting: 0, unread: 2 }],
@@ -140,6 +158,32 @@ test("a collapsed pinned header shows an awaiting dot of its own, without the ru
   }), "pinned-header");
   assert.match(collapsed, /class="session-tree-pinned-dot is-awaiting" role="img" title="Agent waiting for your input" aria-label="Agent waiting for your input \(2\)"/);
   assert.doesNotMatch(collapsed, /session-tree-pinned-dot is-running/);
+});
+
+test("a folder row folds its level and says what it hides behind it", () => {
+  const open = rowMarkup(render({ rows: [folderRow({ expanded: true, depth: 1 })] }), "dir:/work/code");
+  // The hover box keeps the rows' inset at any level; only the text indents.
+  assert.match(open, /^<div class="session-tree-row session-tree-folder" style="top:0;height:28px;--session-tree-depth:1" data-row-key="dir:\/work\/code">/);
+  assert.match(open, /<button type="button" class="session-tree-folder-toggle" aria-expanded="true" title="\/work\/code">/);
+  assert.match(open, /class="session-tree-chevron is-open"/);
+  assert.match(open, /<span class="session-tree-folder-name">code<\/span>/);
+  assert.doesNotMatch(open, /session-tree-folder-count/, "open, its projects speak for it");
+  assert.doesNotMatch(open, /session-tree-group-action/, "a folder has no actions of its own");
+
+  const folded = rowMarkup(render({ rows: [folderRow({ expanded: false, running: 1, unread: 2 })] }), "dir:/work/code");
+  assert.match(folded, /aria-expanded="false"/);
+  assert.doesNotMatch(folded, /session-tree-chevron is-open/);
+  assert.match(folded, /<span class="session-tree-folder-count">3 projects<\/span>/);
+  assert.match(folded, /session-tree-summary-running[\s\S]*?<\/svg>1<\/span>/);
+  assert.match(folded, /session-tree-summary-unread/);
+  // Its chevron leads in the chevron column and next to the text column, as a
+  // project header's does.
+  assert.match(folded, /class="session-tree-chevron" aria-hidden="true">[\s\S]*?<\/svg><span class="session-tree-folder-name">/);
+
+  // The folder a pinned project was pulled out of says where it went.
+  const pinned = rowMarkup(render({ rows: [folderRow({ pinnedAbove: true })] }), "dir:/work/code");
+  assert.match(pinned, /<svg[^>]*class="session-tree-folder-pin" role="img" aria-label="Pinned above">/);
+  assert.doesNotMatch(rowMarkup(render({ rows: [folderRow()] }), "dir:/work/code"), /session-tree-folder-pin/);
 });
 
 test("a collapsed group shows awaiting families apart from running ones", () => {
@@ -560,33 +604,44 @@ test("headers lead with their chevron, and every row's text starts in one column
   // The text column: the toggle's left padding, the 12px chevron and the
   // gap. Session titles, "show more", the empty group's note, the archive's
   // project names and the footer's labels (their 12px icons in the
-  // chevron column) start there too. The last length of a padding
-  // shorthand is its left side.
-  const lastPx = (rule, property) => {
-    const value = cssRule(rule).match(new RegExp(`(?:^|\\n)\\s*${property}: ([^;]+);`))[1];
-    return Number(value.trim().split(/\s+/).at(-1).replace(/px\)?$/, ""));
-  };
-  const textStart = lastPx(".session-tree-group-toggle", "padding") + 12 + lastPx(".session-tree-group-toggle", "gap");
+  // chevron column) start there too. A path tree row adds one indent step
+  // per level on top of that column and nothing else moves: the base of
+  // every padding is the column itself, so depth 0 is the flat list's row.
+  const paddingValue = (rule, property) => cssRule(rule).match(new RegExp(`(?:^|\\n)\\s*${property}: ([^;]+);`))[1].trim();
+  const indent = cssRule(".session-tree").match(/--session-tree-indent: (\d+)px;/);
+  assert.ok(indent, "the indent step");
+  const step = () => `var(--session-tree-depth, 0) * var(--session-tree-indent)`;
+  const basePx = (value) => Number(value.match(/calc\((\d+)px/)?.[1] ?? NaN);
+  const headerPadding = paddingValue(".session-tree-group-toggle", "padding");
+  assert.equal(headerPadding, `0 0 0 calc(5px + ${step()})`);
+  const gap = Number(paddingValue(".session-tree-group-toggle", "gap").replace("px", ""));
+  const textStart = basePx(headerPadding) + 12 + gap;
   assert.equal(textStart, 20);
-  assert.equal(lastPx(".session-tree-session", "padding"), textStart);
+  assert.equal(paddingValue(".session-tree-session", "padding"), `0 4px 0 calc(20px + ${step()})`);
   // A group header's toggle starts at the row's own left edge.
   assert.match(cssRule(".session-tree-group"), /padding: 0 4px 0 0;/);
-  assert.equal(lastPx(".session-tree-footer-button", "padding") + 12 + lastPx(".session-tree-footer-button", "gap"), textStart);
+  // A folder sits on the same grid as a project's header, one step lighter.
+  assert.equal(paddingValue(".session-tree-folder-toggle", "padding"), `0 8px 0 calc(5px + ${step()})`);
+  // The footer's row sits at the inset and its 12px icon in the chevron
+  // column, so its label lands in the same text column.
+  const footerPadding = paddingValue(".session-tree-footer-button", "padding");
+  const footerGap = Number(paddingValue(".session-tree-footer-button", "gap").replace("px", ""));
+  assert.equal(Number(footerPadding.split(/\s+/).at(-1).replace("px", "")) + 12 + footerGap, textStart);
   assert.deepEqual([...source.matchAll(/<(?:FolderPlus|Archive)Icon size=\{(\d+)\} \/>\s*<span className="session-tree-footer-label">/g)].map((match) => Number(match[1])), [12, 12]);
   // These rows span the whole width, so their padding adds the rows' inset.
-  assert.match(css, /\.session-tree-group-empty,\s*\.session-tree-more \{\s*padding-left: calc\(var\(--session-tree-inset-left\) \+ 20px\);/);
+  assert.match(css, /\.session-tree-group-empty,\s*\.session-tree-more \{\s*padding-left: calc\(var\(--session-tree-inset-left\) \+ 20px \+ var\(--session-tree-depth, 0\) \* var\(--session-tree-indent\)\);/);
   // The pinned section's chevron in the same column (its row spans the
   // whole width, a group's sits at the inset).
   assert.match(cssRule(".session-tree-pinned-toggle"), /padding: 0 8px 0 calc\(var\(--session-tree-inset-left\) \+ 5px\);/);
 
   // No layout overrides these paddings, so phones line up the same way.
-  assert.doesNotMatch(css, /\.is-mobile \.session-tree-(?:session|group-toggle|group-empty|more|pinned-toggle|archive-group|footer-button) \{[^}]*padding/);
+  assert.doesNotMatch(css, /\.is-mobile \.session-tree-(?:session|group-toggle|folder-toggle|group-empty|more|pinned-toggle|archive-group|footer-button) \{[^}]*padding/);
   // One rhythm: session rows, every header (a project's, the pinned
   // section's, the archive's projects), the empty note and the footer are
   // one height, 28px (44px on a phone); only "show more" is shorter.
-  assert.deepEqual(SIDEBAR_ROW_HEIGHTS.desktop, { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 });
+  assert.deepEqual(SIDEBAR_ROW_HEIGHTS.desktop, { "pinned-header": 28, session: 28, "pinned-more": 26, folder: 28, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 });
   for (const [layout, height] of [["desktop", 28], ["mobile", 44]]) {
-    for (const kind of ["session", "group", "pinned-header", "group-empty", "footer-open", "footer-archived", "archive-group"]) {
+    for (const kind of ["session", "folder", "group", "pinned-header", "group-empty", "footer-open", "footer-archived", "archive-group"]) {
       assert.equal(SIDEBAR_ROW_HEIGHTS[layout][kind], height, `${layout} ${kind}`);
     }
   }

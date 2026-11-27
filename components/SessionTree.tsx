@@ -112,6 +112,8 @@ export interface SessionTreeProps {
   onSelectFamily(family: SessionFamily): void;
   /** `all` (Alt+click): every group follows this one. */
   onToggleGroup(projectKey: string, all: boolean): void;
+  /** `all` (Alt+click): every folder follows this one. */
+  onToggleFolder(folderKey: string, all: boolean): void;
   /** Reveal SHOW_MORE_STEP more families; key is a projectKey or PINNED_MORE_KEY. */
   onShowMore(key: string): void;
   /** Back to the base limit; key is a projectKey or PINNED_MORE_KEY. */
@@ -265,16 +267,9 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
   }, []);
 
   const offsets = useMemo(() => getRowOffsets(rows, layout), [rows, layout]);
-  // A group header can be dragged to another place in its band (pinned
-  // projects, or the others) when the band has another group.
+  // A group header can be dragged to another place among its siblings (its
+  // band, its folder) when it has one to trade places with (row.movable).
   const canMoveGroups = Boolean(props.onMoveGroup);
-  const groupsPerBand = useMemo(() => {
-    const count = { pinned: 0, other: 0 };
-    for (const row of rows) {
-      if (row.kind === "group") count[row.project.pinned ? "pinned" : "other"]++;
-    }
-    return count;
-  }, [rows]);
   const groupDrag = useGroupDrag({
     rows,
     offsets,
@@ -398,7 +393,7 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
     }
   }, [visibleIndices]);
 
-  const hasTreeRows = rows.some((row) => row.kind === "session" || row.kind === "group" || row.kind === "archive-group");
+  const hasTreeRows = rows.some((row) => row.kind === "session" || row.kind === "group" || row.kind === "folder" || row.kind === "archive-group");
   const showEmpty = !loading && !error && emptyLabel !== null && !hasTreeRows;
   // While dragging: the group's block is dimmed in place (groups never fold
   // up under the pointer), a line marks the drop, and a pill with the
@@ -452,6 +447,9 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
               if (row.kind === "archive-group") {
                 return <ArchiveGroupRowView key={row.key} row={row} top={top} height={height} menuOpen={menuOpen} handlers={handlersRef} />;
               }
+              if (row.kind === "folder") {
+                return <FolderRowView key={row.key} row={row} top={top} height={height} handlers={handlersRef} />;
+              }
               if (row.kind === "group") {
                 const renaming = row.project.key === renamingProjectKey;
                 return (
@@ -462,8 +460,9 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
                     height={height}
                     menuOpen={menuOpen}
                     renaming={renaming}
-                    // A header that is a name field is no handle to drag.
-                    canDrag={canMoveGroups && !renaming && groupsPerBand[row.project.pinned ? "pinned" : "other"] > 1}
+                    // A header that is a name field is no handle to drag, and
+                    // a project alone in its folder has nowhere to go.
+                    canDrag={canMoveGroups && !renaming && row.movable}
                     dragPhase={dragView?.projectKey === row.project.key ? dragView.phase : null}
                     drag={groupDrag.handlers}
                     handlers={handlersRef}
@@ -494,8 +493,13 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
 
 type Handlers = RefObject<SessionTreeProps>;
 
-function rowStyle(top: number, height: number) {
-  return { top, height };
+/**
+ * A row's box. `depth` is its nesting level in the path tree: the CSS indents
+ * by it (`--session-tree-depth`, app/sidebar.css), so a row keeps one inset
+ * box at any level and only its text moves in.
+ */
+function rowStyle(top: number, height: number, depth = 0) {
+  return depth > 0 ? { top, height, "--session-tree-depth": depth } as React.CSSProperties : { top, height };
 }
 
 const SessionRowView = memo(function SessionRowView({
@@ -539,7 +543,7 @@ const SessionRowView = memo(function SessionRowView({
     return (
       <div
         className={className}
-        style={rowStyle(top, height)}
+        style={rowStyle(top, height, row.depth)}
         data-row-key={row.key}
         onKeyDown={(event) => {
           if (event.key !== "Escape" || isImeKey(event)) return;
@@ -567,7 +571,7 @@ const SessionRowView = memo(function SessionRowView({
 
   if (renaming) {
     return (
-      <div className={className} style={rowStyle(top, height)} data-row-key={row.key}>
+      <div className={className} style={rowStyle(top, height, row.depth)} data-row-key={row.key}>
         <RenameInput
           initialValue={title}
           label={t("sidebar.rename")}
@@ -641,7 +645,7 @@ const SessionRowView = memo(function SessionRowView({
   return (
     <div
       className={className}
-      style={rowStyle(top, height)}
+      style={rowStyle(top, height, row.depth)}
       data-row-key={row.key}
       onClick={() => handlers.current.onSelectFamily(family)}
       onContextMenu={(event) => handlers.current.onRowContextMenu(row, event)}
@@ -863,6 +867,48 @@ export function ActivitySummary({ running, awaiting = 0, unread, t }: { running:
   );
 }
 
+/**
+ * A folder of the path tree: a row above the projects it holds, with its own
+ * fold. Lighter than a project's header (a directory groups, a project holds
+ * sessions), and it carries no actions: its only jobs are opening and
+ * folding. Folded, it sums up what it hides: how many projects, and their
+ * runs, unread sessions and parked dialogs.
+ */
+const FolderRowView = memo(function FolderRowView({
+  row,
+  top,
+  height,
+  handlers,
+}: {
+  row: Extract<SidebarRow, { kind: "folder" }>;
+  top: number;
+  height: number;
+  handlers: Handlers;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="session-tree-row session-tree-folder" style={rowStyle(top, height, row.depth)} data-row-key={row.key}>
+      <button
+        type="button"
+        className="session-tree-folder-toggle"
+        aria-expanded={row.expanded}
+        title={row.path}
+        onClick={(event) => handlers.current.onToggleFolder(row.key, event.altKey)}
+      >
+        <ChevronIcon size={12} strokeWidth={3} className={`session-tree-chevron${row.expanded ? " is-open" : ""}`} />
+        <span className="session-tree-folder-name">{row.label}</span>
+        {row.pinnedAbove && <PinIcon size={10} className="session-tree-folder-pin" label={t("sidebar.pinnedAbove")} />}
+        {!row.expanded && (
+          <>
+            <span className="session-tree-folder-count">{t("sidebar.folderProjects", { count: row.projectCount })}</span>
+            <ActivitySummary running={row.running} awaiting={row.awaiting} unread={row.unread} t={t} />
+          </>
+        )}
+      </button>
+    </div>
+  );
+});
+
 const GroupRowView = memo(function GroupRowView({
   row,
   top,
@@ -915,7 +961,7 @@ const GroupRowView = memo(function GroupRowView({
   // code points: whatever fits the field, the server takes.
   if (renaming) {
     return (
-      <div ref={rowRef} className={`${className} is-renaming`} style={rowStyle(top, height)} data-row-key={row.key}>
+      <div ref={rowRef} className={`${className} is-renaming`} style={rowStyle(top, height, row.depth)} data-row-key={row.key}>
         <RenameInput
           initialValue={project.name}
           label={t("sidebar.projectName")}
@@ -931,7 +977,7 @@ const GroupRowView = memo(function GroupRowView({
     <div
       ref={rowRef}
       className={className}
-      style={rowStyle(top, height)}
+      style={rowStyle(top, height, row.depth)}
       data-row-key={row.key}
       onPointerDown={canDrag ? (event) => drag.onPointerDown(event, project.key) : undefined}
     >
@@ -947,6 +993,9 @@ const GroupRowView = memo(function GroupRowView({
             below it do and every header's chevron lines up. */}
         <ChevronIcon size={12} strokeWidth={3} className={`session-tree-chevron${expanded ? " is-open" : ""}`} />
         <span className="session-tree-group-name">{project.name}</span>
+        {/* Pulled out of the tree, the folder is what tells two projects of
+            the same name apart. */}
+        {row.parentLabel ? <span className="session-tree-group-folder" title={project.root}>{row.parentLabel}</span> : null}
         {project.pinned && <PinIcon size={10} className="session-tree-group-pin" label={t("sidebar.pinnedProject")} />}
         {!expanded && <ActivitySummary running={row.running} awaiting={row.awaiting} unread={row.unread} t={t} />}
       </button>
@@ -997,7 +1046,7 @@ const PlainRowView = memo(function PlainRowView({
   onMoreAction: (rowKey: string, key: string, action: "more" | "less", button: HTMLElement) => void;
 }) {
   const { t } = useI18n();
-  const style = rowStyle(top, height);
+  const style = rowStyle(top, height, row.kind === "group-more" || row.kind === "group-empty" ? row.depth : 0);
 
   switch (row.kind) {
     case "pinned-header":

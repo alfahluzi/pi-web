@@ -7,6 +7,16 @@
  * over per-kind heights (`getRowOffsets` + `getVisibleRowIndices`), so every
  * decision about what is shown lives here, pure and testable.
  *
+ * With `pathTree` the groups nest by the projects' paths instead of standing
+ * in one list: a folder above two projects is a row of its own, and a folder
+ * above a single one is not (its segment joins the child's label, unless it
+ * leads the tree, in which case it is dropped: every path on one machine
+ * shares it). A project's own sessions stay under its header and its deeper
+ * projects follow them, so a project's chevron still folds only its sessions.
+ * Pinned projects stay in the flat band above the tree, which is why their
+ * header names its parent folder (`parentLabel`): pulled out of the tree, the
+ * folder is the only thing that tells two projects of the same name apart.
+ *
  * Pin and archive flags are keyed by the family ROOT session id. An archived
  * family returns on its own when the root session gets a newer message
  * (`root.modified`, not `latestModified`: subagent activity alone does not
@@ -24,7 +34,7 @@ import { workspaceKeyOf } from "./workspace-memory";
 
 export type SidebarLayout = "desktop" | "mobile";
 export type SidebarRowKind =
-  | "pinned-header" | "session" | "pinned-more" | "group" | "group-more" | "group-empty"
+  | "pinned-header" | "session" | "pinned-more" | "folder" | "group" | "group-more" | "group-empty"
   | "spacer" | "footer-open" | "footer-archived" | "archive-group";
 
 /**
@@ -36,8 +46,8 @@ export type SidebarRowKind =
  * group from the next and the groups from the footer.
  */
 export const SIDEBAR_ROW_HEIGHTS: Record<SidebarLayout, Record<SidebarRowKind, number>> = {
-  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 },
-  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, group: 44, "group-more": 36, "group-empty": 44, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 44 },
+  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, folder: 28, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 },
+  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, folder: 44, group: 44, "group-more": 36, "group-empty": 44, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 44 },
 };
 export const GROUP_VISIBLE_LIMIT = 6;
 export const PINNED_VISIBLE_LIMIT = 8;
@@ -52,16 +62,61 @@ export const PINNED_MORE_KEY = "pinned";
  */
 export interface SidebarProject { key: string; root: string; name: string; customName: string | null; pinned: boolean; current: boolean }
 export interface SidebarFamilyStatus { running: boolean; awaiting: boolean; unread: boolean; selected: boolean; transient: boolean }
+/**
+ * A folder row of the path tree: a directory above the projects, with its own
+ * fold choice (kept in the same browser map as the groups', under
+ * `folderKeyOf()`, so a project key can never collide with it).
+ */
+export interface SidebarFolder {
+  key: string;
+  /** Segments from the tree's top down to this folder, joined with "/". */
+  path: string;
+  /** Its name, with any single-child folders absorbed: "code/api". */
+  label: string;
+  depth: number;
+  expanded: boolean;
+  /** Project keys of its whole subtree, in tree order. */
+  projectKeys: string[];
+}
 
 // A folded header's counts follow its rows' right column: a family awaiting
 // input counts as awaiting, not running.
 export type SidebarRow =
   | { kind: "pinned-header"; key: "pinned-header"; count: number; collapsed: boolean; running: number; awaiting: number; unread: number }
-  | { kind: "session"; key: string; family: SessionFamily; context: "pinned" | "group" | "archive"; project: SidebarProject; status: SidebarFamilyStatus }
+  | {
+    kind: "folder";
+    key: string;
+    path: string;
+    label: string;
+    depth: number;
+    expanded: boolean;
+    projectCount: number;
+    /** This folder is a pinned project pulled out to the band above. */
+    pinnedAbove: boolean;
+    running: number;
+    awaiting: number;
+    unread: number;
+  }
+  | { kind: "session"; key: string; family: SessionFamily; context: "pinned" | "group" | "archive"; project: SidebarProject; status: SidebarFamilyStatus; depth: number }
   | { kind: "pinned-more"; key: "pinned-more"; hidden: number; canShowLess: boolean; nextShown: number }
-  | { kind: "group"; key: string; project: SidebarProject; expanded: boolean; running: number; awaiting: number; unread: number }
-  | { kind: "group-more"; key: string; projectKey: string; hidden: number; canShowLess: boolean; nextShown: number }
-  | { kind: "group-empty"; key: string; project: SidebarProject }
+  | {
+    kind: "group";
+    key: string;
+    project: SidebarProject;
+    expanded: boolean;
+    depth: number;
+    /** The node above it in the path tree: a folder's key, another project's, or null at the top. */
+    parentKey: string | null;
+    /** The folder it sits in, for a pinned project pulled out of the tree. */
+    parentLabel: string | null;
+    /** Another project shares its parent, so it can be reordered among them. */
+    movable: boolean;
+    running: number;
+    awaiting: number;
+    unread: number;
+  }
+  | { kind: "group-more"; key: string; projectKey: string; depth: number; hidden: number; canShowLess: boolean; nextShown: number }
+  | { kind: "group-empty"; key: string; project: SidebarProject; depth: number }
   | { kind: "spacer"; key: "top-spacer" | "pinned-spacer" | "footer-spacer" | `group-spacer:${string}` }
   | { kind: "footer-open"; key: "footer-open" }
   | { kind: "footer-archived"; key: "footer-archived"; count: number }
@@ -86,6 +141,8 @@ export interface SessionTreeInput {
   /** Families revealed beyond the base limit by "show more", per projectKey or PINNED_MORE_KEY. */
   moreShown: Readonly<Record<string, number>>;
   pinnedCollapsed: boolean;
+  /** Nest the groups by their paths (the sidebar's choice, lib/sidebar-prefs.ts). */
+  pathTree: boolean;
 }
 
 export interface SessionTreeModel {
@@ -106,6 +163,17 @@ export interface SessionTreeModel {
    * only: either may never get a file.
    */
   projectKeysToRecord: string[];
+  /** The path tree's folder rows, top to bottom (empty without `pathTree`). */
+  folders: SidebarFolder[];
+  /**
+   * Project keys sharing a parent in the tree (the key included, in tree
+   * order): a folder's projects, a project's deeper projects, or the tree's
+   * top rows. Everything else is not a sibling, so a move never crosses a
+   * folder, where it would mean nothing.
+   */
+  siblingProjects: Record<string, string[]>;
+  /** The folder keys above each project, top first (empty without `pathTree`). */
+  ancestorFolders: Record<string, string[]>;
 }
 
 type FamilyFlagsInput = Pick<SessionTreeInput, "uiState" | "runningIds" | "awaitingIds" | "unreadIds" | "selectedSessionId">;
@@ -181,6 +249,155 @@ export function isGroupExpanded(project: SidebarProject, groupExpansion: Readonl
     if (typeof choice === "boolean") return choice;
   }
   return project.current || project.pinned;
+}
+
+/**
+ * Display segments of a project root: "/home/x/proj" → ["home", "x", "proj"],
+ * "C:\\a\\b" → ["C:", "a", "b"]. A filesystem root is one segment (itself).
+ */
+export function pathSegments(root: string): string[] {
+  const trimmed = root.replace(/[\\/]+$/, "");
+  const segments = trimmed.split(/[\\/]+/).filter((segment) => segment.length > 0);
+  return segments.length > 0 ? segments : [root];
+}
+
+/**
+ * A folder row's key: its path under a prefix of its own, so a folder can
+ * never take a project's key (nor the other way round) in the one browser map
+ * that holds both fold choices (lib/sidebar-prefs.ts).
+ */
+export function folderKeyOf(path: string): string {
+  return `dir:${path}`;
+}
+
+/** The name of the folder above a project root, or null at a filesystem root. */
+export function parentFolderNameOf(root: string): string | null {
+  const segments = pathSegments(root);
+  return segments.length > 1 ? segments[segments.length - 2] : null;
+}
+
+type PathLevel = Map<string, PathNodeInput>;
+
+interface PathNodeInput {
+  /** Segments from the tree's top down to this folder, joined with "/". */
+  path: string;
+  segment: string;
+  /** The project rooted here, if any. */
+  project: SidebarProject | null;
+  children: PathLevel;
+}
+
+type PathNode = Omit<PathNodeInput, "segment" | "children"> & { label: string; children: PathNode[] };
+
+/**
+ * A root's own text before its first segment: "/" for a POSIX path, nothing
+ * past a drive ("C:"), a network path's prefix. Kept so a folder row's tooltip
+ * names the folder as the filesystem does.
+ */
+function rootPrefixOf(root: string): string {
+  const at = root.indexOf(pathSegments(root)[0]);
+  return at > 0 ? root.slice(0, at) : "";
+}
+
+/** `root` as the path tree writes a node's path (buildPathTree). */
+function treePathOf(root: string): string {
+  return rootPrefixOf(root) + pathSegments(root).join("/");
+}
+
+/**
+ * The projects' roots as a folder tree, in the order `projects` has. A node's
+ * `path` is the folder's own text with "/" between its segments and whatever
+ * came before its first one: it is what a row's tooltip shows and what
+ * `folderKeyOf()` keys its fold by.
+ */
+function buildPathTree(projects: readonly SidebarProject[]): PathLevel {
+  const top: PathLevel = new Map();
+  for (const project of projects) {
+    const segments = pathSegments(project.root);
+    const prefix = rootPrefixOf(project.root);
+    let level = top;
+    let node: PathNodeInput | null = null;
+    for (const [index, segment] of segments.entries()) {
+      let next = level.get(segment);
+      if (!next) {
+        next = { path: prefix + segments.slice(0, index + 1).join("/"), segment, project: null, children: new Map() };
+        level.set(segment, next);
+      }
+      node = next;
+      level = next.children;
+    }
+    // A root is one path: its segments end where the project is.
+    if (node) node.project = project;
+  }
+  return top;
+}
+
+/**
+ * A folder above one child is not a row of its own: its segment joins the
+ * child's label ("code/api"). Inside the tree that keeps where a project sits
+ * without spending a row on every level between two projects.
+ */
+function foldPathNode(input: PathNodeInput): PathNode {
+  let label = input.segment;
+  let { path, project, children } = input;
+  while (project === null && children.size === 1) {
+    const only = [...children.values()][0];
+    label = `${label}/${only.segment}`;
+    path = only.path;
+    project = only.project;
+    children = only.children;
+  }
+  return { path, label, project, children: [...children.values()].map(foldPathNode) };
+}
+
+/**
+ * The tree's top rows. A folder leading to the projects drops its own
+ * segments instead of carrying them into a label: every path on one machine
+ * shares them ("home", "Users", "C:"), so they say nothing about a project
+ * and would make every top row long.
+ */
+function pathTreeRoots(top: PathLevel): PathNode[] {
+  const roots: PathNode[] = [];
+  for (const start of top.values()) {
+    let node = start;
+    while (node.project === null && node.children.size === 1) node = [...node.children.values()][0];
+    roots.push(foldPathNode(node));
+  }
+  return roots;
+}
+
+/** The projects of a node's subtree, the node's own first, in tree order. */
+function projectsUnder(node: PathNode): SidebarProject[] {
+  return [
+    ...(node.project ? [node.project] : []),
+    ...node.children.flatMap(projectsUnder),
+  ];
+}
+
+/** Every project of a tree, depth-first, whether its folders are open or not. */
+function projectsOfTree(nodes: readonly PathNode[]): SidebarProject[] {
+  return nodes.flatMap(projectsUnder);
+}
+
+/**
+ * A folder is open unless this browser says otherwise: an explicit choice
+ * wins, and a folder nobody touched is open only when it matters. Folded by
+ * default keeps a deep tree readable (the point of nesting); open when it
+ * holds the current project's path, or a run, an unread or a blocked session
+ * would hide behind a closed row.
+ */
+function isFolderExpanded(
+  key: string,
+  projectKeys: readonly string[],
+  activity: { running: number; awaiting: number; unread: number },
+  input: Pick<SessionTreeInput, "groupExpansion" | "currentProject">,
+): boolean {
+  if (Object.hasOwn(input.groupExpansion, key)) {
+    const choice = input.groupExpansion[key];
+    if (typeof choice === "boolean") return choice;
+  }
+  if (activity.running > 0 || activity.awaiting > 0 || activity.unread > 0) return true;
+  return input.currentProject !== null && projectKeys.includes(input.currentProject.key);
 }
 
 /**
@@ -315,6 +532,7 @@ function sessionRow(
   family: SessionFamily,
   context: "pinned" | "group" | "archive",
   project: SidebarProject,
+  depth: number,
   input: FamilyFlagsInput,
 ): SidebarRow {
   return {
@@ -324,6 +542,7 @@ function sessionRow(
     context,
     project,
     status: familyStatus(family, input),
+    depth,
   };
 }
 
@@ -463,7 +682,7 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
     if (!input.pinnedCollapsed) {
       const { visible, revealed, nextShown } = visibleFamilies(sorted, PINNED_VISIBLE_LIMIT, shownMoreFor(input.moreShown, PINNED_MORE_KEY), input);
       for (const family of visible) {
-        rows.push(sessionRow(family, "pinned", resolver.get(familyProjectKey(family)), input));
+        rows.push(sessionRow(family, "pinned", resolver.get(familyProjectKey(family)), 0, input));
       }
       const more = moreRowState(sorted.length, visible.length, revealed);
       if (more) rows.push({ kind: "pinned-more", key: "pinned-more", ...more, nextShown });
@@ -515,39 +734,193 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
   );
   const orderedProjects = [...pinnedProjects, ...otherProjects];
   const unorderedKeys = (band: SidebarProject[]) => band.filter((project) => !rank.has(project.key)).map((project) => project.key);
-  const unorderedKeysByBand = { pinned: unorderedKeys(pinnedProjects), other: unorderedKeys(otherProjects) };
-  const projectKeysToRecord = orderedProjects
-    .filter((project) => !rank.has(project.key) && recordable(project))
-    .map((project) => project.key);
 
-  for (const [index, project] of orderedProjects.entries()) {
-    // A gap between two groups, open or folded (#1338): headers right on the
-    // rows above them read as one list.
-    if (index > 0) rows.push({ kind: "spacer", key: `group-spacer:${project.key}` });
+  // Per project, once: a folder's counts are its projects' added up.
+  const countByProject = new Map<string, { running: number; awaiting: number; unread: number }>();
+  const countsOf = (project: SidebarProject) => {
+    let counts = countByProject.get(project.key);
+    if (!counts) {
+      counts = activityCounts(projectFamilies.get(project.key) ?? [], input);
+      countByProject.set(project.key, counts);
+    }
+    return counts;
+  };
+
+  const folders: SidebarFolder[] = [];
+  // Maps until the end: a project key is a path, and a stored one must never
+  // reach Object.prototype (the return converts them with
+  // Object.fromEntries, which defines own properties).
+  const siblingProjects = new Map<string, string[]>();
+  const ancestorFolders = new Map<string, string[]>();
+  // The projects in the order they show: the pinned band, then the tree's
+  // depth-first walk (or the band's own order without one). A folded folder
+  // hides its rows, never its projects: the order saved for them is the one
+  // they have when it opens.
+  let treeProjects: SidebarProject[] = [];
+
+  // A group's own rows under its header: no sessions yet, the families, "show more".
+  const groupFamilyRows = (project: SidebarProject, depth: number, expanded: boolean) => {
+    if (!expanded) return;
     const groupFamilies = projectFamilies.get(project.key) ?? [];
-    const expanded = isGroupExpanded(project, input.groupExpansion);
-    const { running, awaiting, unread } = activityCounts(groupFamilies, input);
-    rows.push({ kind: "group", key: `group:${project.key}`, project, expanded, running, awaiting, unread });
+    if (groupFamilies.length === 0) {
+      rows.push({ kind: "group-empty", key: `empty:${project.key}`, project, depth });
+      return;
+    }
+    const { visible, revealed, nextShown } = visibleFamilies(groupFamilies, GROUP_VISIBLE_LIMIT, shownMoreFor(input.moreShown, project.key), input);
+    for (const family of visible) rows.push(sessionRow(family, "group", project, depth, input));
+    const more = moreRowState(groupFamilies.length, visible.length, revealed);
+    if (more) rows.push({ kind: "group-more", key: `more:${project.key}`, projectKey: project.key, depth, ...more, nextShown });
+  };
 
-    if (expanded) {
-      if (groupFamilies.length === 0) {
-        rows.push({ kind: "group-empty", key: `empty:${project.key}`, project });
-      } else {
-        const { visible, revealed, nextShown } = visibleFamilies(groupFamilies, GROUP_VISIBLE_LIMIT, shownMoreFor(input.moreShown, project.key), input);
-        for (const family of visible) rows.push(sessionRow(family, "group", project, input));
-        const more = moreRowState(groupFamilies.length, visible.length, revealed);
-        if (more) rows.push({ kind: "group-more", key: `more:${project.key}`, projectKey: project.key, ...more, nextShown });
+  const visibleGroupRows = (project: SidebarProject, depth: number, movable: boolean) => {
+    const expanded = isGroupExpanded(project, input.groupExpansion);
+    rows.push({
+      kind: "group",
+      key: `group:${project.key}`,
+      project,
+      expanded,
+      depth,
+      parentKey: null,
+      // Pinned projects leave the tree for the band above it: naming their
+      // folder is what tells two projects of the same name apart there. The
+      // flat list never had that, and keeps its rows as they were.
+      parentLabel: input.pathTree && project.pinned ? parentFolderNameOf(project.root) : null,
+      movable,
+      ...countsOf(project),
+    });
+    groupFamilyRows(project, depth, expanded);
+  };
+
+  if (!input.pathTree) {
+    // One flat list: every project of a band can move past its neighbours.
+    const pinnedKeys = pinnedProjects.map((project) => project.key);
+    const otherKeys = otherProjects.map((project) => project.key);
+    for (const project of pinnedProjects) siblingProjects.set(project.key, pinnedKeys);
+    for (const project of otherProjects) siblingProjects.set(project.key, otherKeys);
+    for (const [index, project] of orderedProjects.entries()) {
+      if (index > 0) rows.push({ kind: "spacer", key: `group-spacer:${project.key}` });
+      visibleGroupRows(project, 0, (project.pinned ? pinnedKeys : otherKeys).length > 1);
+      treeProjects.push(project);
+    }
+  } else {
+    const roots = pathTreeRoots(buildPathTree(otherProjects));
+    treeProjects = projectsOfTree(roots);
+    // A pinned project left the tree, but the folder its path makes stays: it
+    // holds the projects under it, and says so rather than looking like a
+    // second row of the same name.
+    const pinnedAbove = new Set(pinnedProjects.map((project) => treePathOf(project.root)));
+    // The band above the tree is flat: its projects are siblings of each
+    // other, as they were in the list, so they reorder among themselves.
+    const pinnedKeys = pinnedProjects.map((project) => project.key);
+    for (const key of pinnedKeys) siblingProjects.set(key, pinnedKeys);
+
+    // A level's sibling list: the projects sitting directly in it. A move
+    // inside the tree reorders those, and only those: a project's place is
+    // its path, so moving one into another folder would mean nothing.
+    const noteSiblings = (level: readonly PathNode[]) => {
+      const keys = level.flatMap((node) => (node.project ? [node.project.key] : []));
+      if (keys.length > 0) for (const key of keys) siblingProjects.set(key, keys);
+      for (const node of level) if (node.children.length > 0) noteSiblings(node.children);
+    };
+    noteSiblings(roots);
+
+    function emitNode(node: PathNode, depth: number, parentKey: string | null, ancestors: string[]): void {
+      if (node.project) {
+        const project = node.project;
+        ancestorFolders.set(project.key, ancestors);
+        const expanded = isGroupExpanded(project, input.groupExpansion);
+        rows.push({
+          kind: "group",
+          key: `group:${project.key}`,
+          project,
+          expanded,
+          depth,
+          parentKey,
+          parentLabel: null,
+          movable: (siblingProjects.get(project.key)?.length ?? 0) > 1,
+          ...countsOf(project),
+        });
+        groupFamilyRows(project, depth, expanded);
+        // Its own sessions first, its deeper projects after them: a group's
+        // chevron folds its sessions, never the projects rooted below it.
+        for (const child of node.children) emitNode(child, depth + 1, `group:${project.key}`, ancestors);
+        return;
       }
+      const key = folderKeyOf(node.path);
+      const subtree = projectsUnder(node);
+      const counts = subtree.reduce(
+        (total, project) => {
+          const own = countsOf(project);
+          return { running: total.running + own.running, awaiting: total.awaiting + own.awaiting, unread: total.unread + own.unread };
+        },
+        { running: 0, awaiting: 0, unread: 0 },
+      );
+      const projectKeys = subtree.map((project) => project.key);
+      const expanded = isFolderExpanded(key, projectKeys, counts, input);
+      folders.push({ key, path: node.path, label: node.label, depth, expanded, projectKeys });
+      rows.push({
+        kind: "folder",
+        key,
+        path: node.path,
+        label: node.label,
+        depth,
+        expanded,
+        projectCount: projectKeys.length,
+        pinnedAbove: pinnedAbove.has(node.path),
+        ...counts,
+      });
+      const reached = [...ancestors, key];
+      if (!expanded) {
+        // A folded folder still knows where its projects sit, for a reveal.
+        for (const project of subtree) ancestorFolders.set(project.key, reached);
+        return;
+      }
+      for (const child of node.children) emitNode(child, depth + 1, key, reached);
+    }
+
+    // Pinned projects stay flat above the tree; a gap parts every two top
+    // rows, as it does in the flat list (#1338).
+    let first = true;
+    const startRow = (key: string) => {
+      if (!first) rows.push({ kind: "spacer", key: `group-spacer:${key}` });
+      first = false;
+    };
+    for (const project of pinnedProjects) {
+      startRow(project.key);
+      visibleGroupRows(project, 0, pinnedProjects.length > 1);
+    }
+    for (const root of roots) {
+      startRow(root.project?.key ?? root.path);
+      emitNode(root, 0, null, []);
     }
   }
 
+  // Flat, `treeProjects` is the whole list already (pinned band first).
+  const orderedShown = input.pathTree ? [...pinnedProjects, ...treeProjects] : treeProjects;
+  const unorderedKeysByBand = {
+    pinned: unorderedKeys(pinnedProjects),
+    other: unorderedKeys(input.pathTree ? treeProjects : otherProjects),
+  };
+  const projectKeysToRecord = orderedShown
+    .filter((project) => !rank.has(project.key) && recordable(project))
+    .map((project) => project.key);
+
   // One spacer parts the groups from the footer, as one parts the pinned
   // section from them.
-  if (orderedProjects.length > 0) rows.push({ kind: "spacer", key: "footer-spacer" });
+  if (orderedShown.length > 0) rows.push({ kind: "spacer", key: "footer-spacer" });
   rows.push({ kind: "footer-open", key: "footer-open" });
   if (archivedCount > 0) rows.push({ kind: "footer-archived", key: "footer-archived", count: archivedCount });
 
-  return { rows, projects: orderedProjects, archivedCount, unorderedKeysByBand, projectKeysToRecord };
+  return {
+    rows,
+    projects: orderedShown,
+    archivedCount,
+    unorderedKeysByBand,
+    projectKeysToRecord,
+    folders,
+    siblingProjects: Object.fromEntries(siblingProjects),
+    ancestorFolders: Object.fromEntries(ancestorFolders),
+  };
 }
 
 /**
@@ -606,7 +979,7 @@ export function buildArchiveRows(
       .map((entry, index) => ({ ...entry, index }))
       .sort((a, b) => compareDesc(a.archivedAt, b.archivedAt) || a.index - b.index);
     for (const { family } of families) {
-      rows.push(sessionRow(family, "archive", project, flags));
+      rows.push(sessionRow(family, "archive", project, 0, flags));
     }
   }
   return rows;
@@ -701,9 +1074,18 @@ export function getRowOffsets(rows: readonly SidebarRow[], layout: SidebarLayout
  * its last row (its sessions, "show more", the empty note). `gapAbove` and
  * `gapBelow` are the spacer rows that part it from what is next to it: the
  * pinned section above the first, another group, the footer below the last.
- * Two neighbours share the spacer between them.
+ * Two neighbours share the spacer between them. `parentKey` is the node above
+ * it in the path tree: only a group of the same one can trade places with it.
  */
-export interface GroupBlock { key: string; pinned: boolean; top: number; bottom: number; gapAbove: number; gapBelow: number }
+export interface GroupBlock {
+  key: string;
+  pinned: boolean;
+  parentKey: string | null;
+  top: number;
+  bottom: number;
+  gapAbove: number;
+  gapBelow: number;
+}
 
 /** A row that belongs to the group above it. */
 function isGroupMemberRow(row: SidebarRow): boolean {
@@ -729,6 +1111,7 @@ export function groupBlocks(rows: readonly SidebarRow[], offsets: readonly numbe
     blocks.push({
       key: row.project.key,
       pinned: row.project.pinned,
+      parentKey: row.parentKey,
       top: offsets[index],
       bottom: offsets[end],
       gapAbove: offsets[index] - offsets[above],
@@ -747,11 +1130,13 @@ const DROP_LINE_MIN_Y = 3;
 
 /**
  * The drop target for a group dragged to content position `y`. Only the
- * dragged group's band counts (a drag never crosses from pinned projects to
- * the others), so a pointer above the band (the pinned section) means its
- * top and one below it (the footer) its bottom. The dragged block goes
- * before the first other block whose middle is below `y`. Null when that is
- * where it already is, or the band has no other group. Works from the rows
+ * dragged group's row counts: its band (a drag never crosses from pinned
+ * projects to the others) and its parent in the path tree (a project's place
+ * is its path, so it can only trade places with the projects of its own
+ * folder). A pointer above that row (the pinned section, a folder above it)
+ * means its top and one below it (the footer) its bottom. The dragged block
+ * goes before the first other block whose middle is below `y`. Null when that
+ * is where it already is, or the row has no other group. Works from the rows
  * and offsets alone: collapsed groups, "show more" and rows not mounted
  * count as laid out. The line sits in the middle of the spacer it marks
  * (between two groups, after the pinned section or before the footer), and
@@ -760,7 +1145,7 @@ const DROP_LINE_MIN_Y = 3;
 export function groupDropAt(blocks: readonly GroupBlock[], draggedKey: string, y: number): GroupDrop | null {
   const dragged = blocks.find((block) => block.key === draggedKey);
   if (!dragged) return null;
-  const band = blocks.filter((block) => block.pinned === dragged.pinned);
+  const band = blocks.filter((block) => block.pinned === dragged.pinned && block.parentKey === dragged.parentKey);
   const from = band.indexOf(dragged);
   const others = band.filter((block) => block !== dragged);
   if (others.length === 0) return null;
@@ -775,20 +1160,20 @@ export function groupDropAt(blocks: readonly GroupBlock[], draggedKey: string, y
 
 /**
  * Move up / Move down in a group's menu: the move that swaps `key` with its
- * neighbour in its band (`projects` in group order). Null at the band's edge.
+ * neighbour among its siblings (`siblingProjects`, the tree model's). Null at
+ * the edge of the row it sits in.
  */
-export function adjacentProjectMove(
-  projects: readonly SidebarProject[],
+export function adjacentSiblingMove(
+  siblingProjects: Readonly<Record<string, readonly string[]>>,
   key: string,
   direction: "up" | "down",
 ): { anchorKey: string; position: ProjectMovePosition } | null {
-  const project = projects.find((item) => item.key === key);
-  if (!project) return null;
-  const band = projects.filter((item) => item.pinned === project.pinned);
-  const index = band.indexOf(project);
-  const neighbour = band[direction === "up" ? index - 1 : index + 1];
-  if (!neighbour) return null;
-  return { anchorKey: neighbour.key, position: direction === "up" ? "before" : "after" };
+  const siblings = siblingProjects[key];
+  if (!siblings) return null;
+  const index = siblings.indexOf(key);
+  const neighbour = index < 0 ? undefined : siblings[direction === "up" ? index - 1 : index + 1];
+  if (neighbour === undefined) return null;
+  return { anchorKey: neighbour, position: direction === "up" ? "before" : "after" };
 }
 
 /**

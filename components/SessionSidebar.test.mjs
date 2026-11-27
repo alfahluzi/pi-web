@@ -504,7 +504,9 @@ test("every way of opening a session reveals its row through one effect keyed on
   assert.match(effect, /focus\?\.sessionId === sessionId \? \{ takeFocusFrom: focus\.takeFocusFrom \} : \{\}/);
   // A fold over the row is opened as the user's own choice would be.
   assert.match(effect, /savePinnedCollapsed\(false\);/);
-  assert.match(effect, /saveGroupChoices\(next, \[location\.projectKey\]\);/);
+  assert.match(effect, /saveGroupChoices\(next, opened\);/);
+  // The path tree's folded folders above the row open with it.
+  assert.match(effect, /model\.ancestorFolders\[location\.projectKey\]/);
 
   // The fork has no reveal of its own any more: it hands its focus rule to the effect.
   const fork = callbackBody("openForked");
