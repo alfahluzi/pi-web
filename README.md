@@ -71,7 +71,7 @@ npm install -g .
 pi-web --help
 ```
 
-`pi-web update` and the update check in the UI follow the upstream npm package, so they cannot update a git checkout. Rerun `./install.sh` to update the fork; it pulls, rebuilds and relinks.
+**Warning: never update this fork with `pi-web update`.** `pi-web update`, `pi-web update --check` and the update check in the UI read the **upstream npm package** `@agegr/pi-web`, not this fork, and they accept only a strict `X.Y.Z` release. Every fork version is a prerelease (`0.17.0-0.1`, …), so they never offer anything — and an install they did perform would be upstream Pi Web without this fork's changes. Update the fork with the command from above instead: it pulls, rebuilds and relinks.
 
 ### Upstream npm package
 
