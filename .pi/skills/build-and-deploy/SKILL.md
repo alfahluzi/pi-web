@@ -149,10 +149,40 @@ gh release view "v<version>" -R alfahluzi/pi-web \
   --json tagName,isDraft,isPrerelease,url
 ```
 
+Then attach the finished package, so installing this release needs no clone and
+no build. `npm pack` writes the tarball `package.json#files` describes (about
+8 MB, `.next/cache` excluded) but leaves `package-lock.json` out, so the lockfile
+is attached beside it and `install.sh` puts it back before `npm ci`:
+
+```bash
+stage="$(mktemp -d)"
+npm pack --pack-destination "$stage"
+tgz="$(ls "$stage"/*.tgz)"
+node -e '
+  const fs = require("fs"), crypto = require("crypto"), path = require("path");
+  const [file, out] = process.argv.slice(1);
+  const hash = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  fs.writeFileSync(out, `${hash}  ${path.basename(file)}\n`);
+' "$tgz" "$tgz.sha256"
+gh release upload "v<version>" -R alfahluzi/pi-web \
+  "$tgz" "$tgz.sha256" package-lock.json install.sh --clobber
+gh release view "v<version>" -R alfahluzi/pi-web --json assets --jq '.assets[].name'
+rm -rf "$stage"
+```
+
+The four assets must be listed: `agegr-pi-web-<version>.tgz`, its `.sha256`,
+`package-lock.json` and `install.sh`. `npm pack` must run **after** the build in
+step 5, so the tarball holds the committed `.next` (check
+`tar -tzf "$tgz" | grep BUILD_ID`); a tarball made before the build has none and
+`install.sh` refuses it. The `.sha256` file must keep the
+`<hex>  <filename>` form `sha256sum` writes, which is what the installer parses.
+
 Write the notes from the deployed range, not `--generate-notes`: the fork's
 previous tag can be many upstream versions back, and GitHub would then list
 that whole history. Say what the counters mean, the build id, the four checks,
-the commits since the previously deployed commit, and how to install the fork.
+the commits since the previously deployed commit, and how to install the fork —
+both `curl -fsSL https://raw.githubusercontent.com/alfahluzi/pi-web/custom/install.sh | sh`
+(no build) and an install from a checkout.
 
 Then verify the push:
 
@@ -169,7 +199,8 @@ would publish every upstream tag this clone has fetched.
 
 State the commits deployed, major or minor with the commit that decided it (or
 that none was breaking), the old → new version, the outcome of the four checks,
-and the pushed branch, tag and GitHub release with their hashes and URL.
+the release assets uploaded with their sizes, and the pushed branch, tag and
+GitHub release with their hashes and URL.
 
 ## Notes
 
@@ -184,6 +215,19 @@ and the pushed branch, tag and GitHub release with their hashes and URL.
   npm from this fork.
 - `pi-web update`, `pi-web update --check` and the UI's update check accept only
   strict `X.Y.Z`, so they never offer upgrades for `<base>-<a>.<b>`. Updating a
-  checkout of this fork is `git pull` + `npm ci` + `npm run build`.
+  checkout of this fork is `git pull` + `npm ci` + `npm run build`; updating a
+  release install is `install.sh` again (it downloads the newest release).
+- `install.sh` has two modes. From a clone (or `--source`, or when
+  `$PI_WEB_DIR/.git` exists) it updates, builds and links that checkout. Anywhere
+  else it downloads the newest release's `agegr-pi-web-<version>.tgz`, verifies
+  its published sha256, unpacks it into `$PI_WEB_DIR` (default `~/pi-web`), runs
+  `npm ci --omit=dev` there, and links that directory as the global command. The
+  live directory is swapped only after the download, the checksum and npm
+  succeeded, so a failed install leaves the previous one running. That path needs
+  Node.js and `tar` — no git, no compiler, no build.
+- The release assets are the only distribution channel: nothing of this fork
+  goes to npm (that name is upstream's), and no workflow builds them — the
+  operator's `gh` uploads them, because the repository's workflow token is
+  read-only.
 - `./deploy-to-pi-web.sh` promotes a finished build to the local PM2 app. It is a
   separate, machine-local deployment and not part of this flow.

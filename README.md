@@ -47,28 +47,31 @@ npm start
 
 ### The pi-web command
 
-`install.sh` installs this fork as the global `pi-web` command: it fast-forwards the branch, runs `npm ci`, builds `.next`, and links the checkout into npm's global prefix. With no checkout to install it clones one first, so a machine with Node.js and git needs only:
+`install.sh` installs this fork as the global `pi-web` command. A release of the fork carries its finished build, so a machine that has only Node.js and `tar` needs no clone, no compiler and no build:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alfahluzi/pi-web/custom/install.sh | sh
 ```
 
-Inside a clone, run it from the checkout instead:
+The script looks up the newest release of `alfahluzi/pi-web`, downloads its `agegr-pi-web-<version>.tgz`, verifies the sha256 published beside it, unpacks it into `$PI_WEB_DIR` (`~/pi-web` by default), installs its production dependencies with `npm ci --omit=dev`, and links that directory into npm's global prefix. `--tag` installs a named release instead:
 
 ```bash
-./install.sh          # update, install dependencies, build, link
-./install.sh --check  # print what it would do, change nothing
+curl -fsSL https://raw.githubusercontent.com/alfahluzi/pi-web/custom/install.sh | sh -s -- --tag v0.17.0-0.1
 ```
 
-The script is plain `sh` (no bash needed) and clones into `$PI_WEB_DIR` (`~/pi-web` by default) when it has no checkout. The global command is a symlink to the checkout, so the source tree stays the single copy: rerun the same command after a `git pull`. `--no-deps` rebuilds with the `node_modules` already present, and `--restart` stops the pm2 app that serves this checkout around the build and starts it again afterwards. Stop any other running server first (`pi-web stop`) — the build replaces `.next/` underneath it.
+`-s --` hands the options to the script; `sh --tag …` is rejected by `sh` itself. Nothing of this fork goes to npm — its GitHub releases are the only channel, and they carry the tarball, its checksum, the lockfile and the script itself.
 
-To install a published release instead of the tip of the branch:
+Inside a clone the same script installs that checkout from source instead: it fast-forwards the branch, runs `npm ci`, builds `.next`, and links the checkout. A checkout at `$PI_WEB_DIR` (or `--source`) asks for that mode too:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alfahluzi/pi-web/custom/install.sh | sh -s -- --tag v0.17.0-0.0
+./install.sh             # update, install dependencies, build, link
+./install.sh --no-deps   # rebuild with the node_modules already present
+./install.sh --restart   # stop the pm2 app serving this install, start it after
+./install.sh --check     # print what it would do, change nothing
+./install.sh --source    # clone the branch and build it
 ```
 
-`-s --` hands the options to the script; `sh --tag …` is rejected by `sh` itself. The checkout stays on that tag (detached HEAD), so rerun the piped command with another `--tag` to move it, or `git -C ~/pi-web checkout custom` to follow the branch again — a tag usually predates this script, so its tree has no `./install.sh` to run.
+The script is plain `sh` (no bash needed). The global command is a symlink to the install directory, so that directory stays the single copy and rerunning the same command is the update. Stop any other running server first (`pi-web stop`): a build replaces `.next/` underneath it, and a release install moves the whole directory. A release install unpacks and installs beside the live one and swaps it in only after the download, the checksum and npm all succeeded, so a failed update leaves the previous install working. In a source install, `--tag` switches the checkout to that published tag (detached HEAD) and builds it there instead.
 
 Without the script:
 
@@ -79,7 +82,7 @@ npm install -g .
 pi-web --help
 ```
 
-**Warning: never update this fork with `pi-web update`.** `pi-web update`, `pi-web update --check` and the update check in the UI read the **upstream npm package** `@agegr/pi-web`, not this fork, and they accept only a strict `X.Y.Z` release. Every fork version is a prerelease (`0.17.0-0.1`, …), so they never offer anything — and an install they did perform would be upstream Pi Web without this fork's changes. Update the fork with the command from above instead: it pulls, rebuilds and relinks.
+**Warning: never update this fork with `pi-web update`.** `pi-web update`, `pi-web update --check` and the update check in the UI read the **upstream npm package** `@agegr/pi-web`, not this fork, and they accept only a strict `X.Y.Z` release. Every fork version is a prerelease (`0.17.0-0.1`, …), so they never offer anything — and an install they did perform would be upstream Pi Web without this fork's changes. Update the fork with the command from above instead: a release install downloads the newest release, a checkout fast-forwards, rebuilds and relinks.
 
 ### Upstream npm package
 
