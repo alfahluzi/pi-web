@@ -47,23 +47,25 @@ npm start
 
 ### The pi-web command
 
-To get the `pi-web` CLI from this checkout instead of from npm, build it and link it globally:
+`./install.sh` installs this checkout as the global `pi-web` command: it fast-forwards the branch, runs `npm ci`, builds `.next`, and links the checkout into npm's global prefix.
 
 ```bash
+./install.sh          # update, install dependencies, build, link
+./install.sh --check  # print what it would do, change nothing
+```
+
+The global command is a symlink to the checkout, so the source tree stays the single copy: rerun the same command after a `git pull`. `--no-deps` rebuilds with the `node_modules` already present, and `--restart` stops the pm2 app that serves this checkout around the build and starts it again afterwards. Stop any other running server first (`pi-web stop`) — the build replaces `.next/` underneath it.
+
+Without the script:
+
+```bash
+npm ci
 npm run build
 npm install -g .
 pi-web --help
 ```
 
-`pi-web update` and the update check in the UI follow the upstream npm package, so they do not update a git checkout. Update the fork with git and rebuild:
-
-```bash
-pi-web stop
-git pull
-npm ci
-npm run build
-pi-web
-```
+`pi-web update` and the update check in the UI follow the upstream npm package, so they cannot update a git checkout. Rerun `./install.sh` to update the fork; it pulls, rebuilds and relinks.
 
 ### Upstream npm package
 

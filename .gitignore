@@ -50,3 +50,8 @@ yarn-error.log*
 next-env.d.ts
 .factory
 e2e_*.mjs
+
+# local plan-manager backups and telemetry
+.ppm/**/*.bak*
+.ppm/**/tasks.bak-*/
+.sangkar/
