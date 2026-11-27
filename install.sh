@@ -28,6 +28,7 @@ MIN_NODE="22.19.0"
 DO_DEPS=1
 RESTART=0
 CHECK_ONLY=0
+TAG=""
 stopped_apps=""
 
 usage() {
@@ -38,6 +39,8 @@ Update a pi-web checkout, install its dependencies, build .next, and link the
 checkout as the global `pi-web` command. With no checkout beside the script it
 clones the fork into $PI_WEB_DIR first.
 
+  --tag <tag>   install that published tag (for example v0.17.0-0.0) instead of
+                the tip of the branch, and stay on it
   --no-deps     skip `npm ci`; rebuild with the node_modules already present
   --restart     stop the pm2 app that serves this checkout before the build and
                 start it again afterwards
@@ -142,6 +145,10 @@ update_checkout() {
     return 0
   fi
   branch="$(git -C "$src" rev-parse --abbrev-ref HEAD)"
+  if [ "$branch" = "HEAD" ]; then
+    warn "$src is at a tag (detached HEAD); install another with --tag <tag>, or follow the branch again with: git -C $src checkout $BRANCH"
+    return 0
+  fi
   if [ -n "$(git -C "$src" status --porcelain -uno)" ]; then
     warn "uncommitted changes in $src; skipping git pull"
     return 0
@@ -165,6 +172,31 @@ update_checkout() {
   else
     warn "$branch has diverged from origin/$branch; building the checkout as it is"
   fi
+}
+
+# Move a checkout onto a published tag (detached HEAD) so the install is
+# reproducible. Uncommitted work would be lost by the checkout, so it refuses.
+switch_to_tag() {
+  if [ ! -d "$src/.git" ]; then
+    warn "$src is not a git repository; cannot install tag $TAG, building it as it is"
+    return 0
+  fi
+  if [ -n "$(git -C "$src" status --porcelain -uno)" ]; then
+    die "uncommitted changes in $src; commit or stash them before installing tag $TAG"
+  fi
+  if ! git -C "$src" rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+    if ! git -C "$src" fetch --tags origin; then
+      die "could not fetch tags from $REPO_URL, and tag $TAG is not in $src"
+    fi
+  fi
+  git -C "$src" rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null \
+    || die "no tag $TAG in $REPO_URL"
+  if [ "$(git -C "$src" rev-parse --short HEAD)" = "$(git -C "$src" rev-parse --short "refs/tags/$TAG^{commit}")" ]; then
+    say "Already at tag $TAG"
+    return 0
+  fi
+  say "Switching to tag $TAG (detached HEAD)"
+  git -C "$src" checkout --quiet "$TAG"
 }
 
 build_checkout() {
@@ -214,7 +246,11 @@ report() {
     warn "pi-web is not on PATH; add $(npm prefix -g)/bin to it"
   else
     version="$("$bin" version 2>/dev/null || true)"
-    say "pi-web ${version:-?} from $src"
+    if [ -n "$TAG" ]; then
+      say "pi-web ${version:-?} from $src (tag $TAG)"
+    else
+      say "pi-web ${version:-?} from $src"
+    fi
     say "Command: $bin"
   fi
   say "Start it with: pi-web"
@@ -222,17 +258,27 @@ report() {
 
 # --- options ---------------------------------------------------------------
 
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tag)
+      if [ $# -lt 2 ]; then
+        usage >&2
+        die "--tag needs a value, for example: --tag v0.17.0-0.0"
+      fi
+      TAG="$2"
+      shift
+      ;;
+    --tag=*) TAG="${1#--tag=}" ;;
     --no-deps) DO_DEPS=0 ;;
     --restart) RESTART=1 ;;
     --check) CHECK_ONLY=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
       usage >&2
-      die "unknown option: $arg"
+      die "unknown option: $1"
       ;;
   esac
+  shift
 done
 
 # --- checkout --------------------------------------------------------------
@@ -261,13 +307,22 @@ if [ -z "$src" ]; then
   elif [ "$CHECK_ONLY" = 1 ]; then
     say "No checkout at $CLONE_DIR yet"
     say "Node $(node --version), npm $(npm --version)"
-    say "An install would run: git clone --branch $BRANCH $REPO_URL $CLONE_DIR"
+    if [ -n "$TAG" ]; then
+      say "An install would run: git clone --branch $TAG $REPO_URL $CLONE_DIR"
+    else
+      say "An install would run: git clone --branch $BRANCH $REPO_URL $CLONE_DIR"
+    fi
     say "Rerun without --check to clone and install"
     exit 0
   else
     command -v git >/dev/null 2>&1 || die "git is required to clone $REPO_URL."
-    say "Cloning $REPO_URL (branch $BRANCH) into $CLONE_DIR"
-    git clone --branch "$BRANCH" "$REPO_URL" "$CLONE_DIR"
+    if [ -n "$TAG" ]; then
+      say "Cloning $REPO_URL (tag $TAG) into $CLONE_DIR"
+      git clone --branch "$TAG" "$REPO_URL" "$CLONE_DIR"
+    else
+      say "Cloning $REPO_URL (branch $BRANCH) into $CLONE_DIR"
+      git clone --branch "$BRANCH" "$REPO_URL" "$CLONE_DIR"
+    fi
     src="$(cd "$CLONE_DIR" && pwd -P)"
   fi
 fi
@@ -279,6 +334,13 @@ global_root="$(npm root -g)"
 if [ "$CHECK_ONLY" = 1 ]; then
   say "Checkout: $src"
   say "Node $(node --version), npm $(npm --version), global root $global_root"
+  if [ -n "$TAG" ]; then
+    if git -C "$src" rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null 2>&1; then
+      say "Tag to install: $TAG (present)"
+    else
+      say "Tag to install: $TAG (would be fetched from origin)"
+    fi
+  fi
   if [ -d "$src/.git" ]; then
     say "Branch $(git -C "$src" rev-parse --abbrev-ref HEAD) at $(git -C "$src" rev-parse --short HEAD)"
     dirty="$(git -C "$src" status --porcelain -uno)"
@@ -318,7 +380,11 @@ fi
 trap restore_services 0
 
 say "Checkout: $src"
-update_checkout
+if [ -n "$TAG" ]; then
+  switch_to_tag
+else
+  update_checkout
+fi
 
 serving="$(detect_serving "$src")"
 pm2_apps="$(detect_pm2_apps "$src")"

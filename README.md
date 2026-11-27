@@ -62,6 +62,14 @@ Inside a clone, run it from the checkout instead:
 
 The script is plain `sh` (no bash needed) and clones into `$PI_WEB_DIR` (`~/pi-web` by default) when it has no checkout. The global command is a symlink to the checkout, so the source tree stays the single copy: rerun the same command after a `git pull`. `--no-deps` rebuilds with the `node_modules` already present, and `--restart` stops the pm2 app that serves this checkout around the build and starts it again afterwards. Stop any other running server first (`pi-web stop`) — the build replaces `.next/` underneath it.
 
+To install a published release instead of the tip of the branch:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alfahluzi/pi-web/custom/install.sh | sh -s -- --tag v0.17.0-0.0
+```
+
+`-s --` hands the options to the script; `sh --tag …` is rejected by `sh` itself. The checkout stays on that tag (detached HEAD), so rerun the piped command with another `--tag` to move it, or `git -C ~/pi-web checkout custom` to follow the branch again — a tag usually predates this script, so its tree has no `./install.sh` to run.
+
 Without the script:
 
 ```bash
