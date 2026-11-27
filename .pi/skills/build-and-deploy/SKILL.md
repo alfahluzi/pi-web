@@ -139,10 +139,25 @@ git push origin custom
 git push origin "v<version>"
 ```
 
-Then verify the deploy:
+Then create the GitHub release — the fork's release is that release, nothing
+else is published (`-R` matters: `gh` here defaults to `agegr/pi-web`):
 
 ```bash
-git rev-parse --short HEAD origin/custom
+gh release create "v<version>" -R alfahluzi/pi-web --title "v<version>" \
+  --verify-tag --notes-file <notes>
+gh release view "v<version>" -R alfahluzi/pi-web \
+  --json tagName,isDraft,isPrerelease,url
+```
+
+Write the notes from the deployed range, not `--generate-notes`: the fork's
+previous tag can be many upstream versions back, and GitHub would then list
+that whole history. Say what the counters mean, the build id, the four checks,
+the commits since the previously deployed commit, and how to install the fork.
+
+Then verify the push:
+
+```bash
+git rev-parse --short HEAD; git rev-parse --short origin/custom
 git ls-remote --tags origin "v<version>"
 ```
 
@@ -154,16 +169,19 @@ would publish every upstream tag this clone has fetched.
 
 State the commits deployed, major or minor with the commit that decided it (or
 that none was breaking), the old → new version, the outcome of the four checks,
-and the pushed branch and tag with their commit hashes.
+and the pushed branch, tag and GitHub release with their hashes and URL.
 
 ## Notes
 
-- The `v*` tag also matches upstream's `.github/workflows/publish.yml`, which
-  tries to publish `@agegr/pi-web` to npm and an image to GHCR. Those publish
-  permissions belong to agegr's repositories, so that run fails. It is expected
-  and says nothing about the deploy: the deploy is done when the branch and tag
-  are on GitHub. To avoid the red runs, rename the tag to `fork-v<version>` or
-  narrow that workflow's trigger in this fork.
+- The fork has no tag-triggered workflow: `v*` matched upstream's
+  `.github/workflows/publish.yml`, which publishes `@agegr/pi-web` to npm
+  (Trusted Publishing names agegr's repo) and an image to GHCR, so every deploy
+  ended in a failed run. A release-only workflow cannot work either — this
+  repository's default workflow token is read-only, so a job asking for
+  `contents: write` is capped and `gh release create` gets 403. The workflow is
+  therefore gone and step 6 creates the release with `gh` as the operator. Do
+  not reintroduce one without raising that setting first, and never publish to
+  npm from this fork.
 - `pi-web update`, `pi-web update --check` and the UI's update check accept only
   strict `X.Y.Z`, so they never offer upgrades for `<base>-<a>.<b>`. Updating a
   checkout of this fork is `git pull` + `npm ci` + `npm run build`.
