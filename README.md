@@ -47,14 +47,20 @@ npm start
 
 ### The pi-web command
 
-`./install.sh` installs this checkout as the global `pi-web` command: it fast-forwards the branch, runs `npm ci`, builds `.next`, and links the checkout into npm's global prefix.
+`install.sh` installs this fork as the global `pi-web` command: it fast-forwards the branch, runs `npm ci`, builds `.next`, and links the checkout into npm's global prefix. With no checkout to install it clones one first, so a machine with Node.js and git needs only:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alfahluzi/pi-web/custom/install.sh | sh
+```
+
+Inside a clone, run it from the checkout instead:
 
 ```bash
 ./install.sh          # update, install dependencies, build, link
 ./install.sh --check  # print what it would do, change nothing
 ```
 
-The global command is a symlink to the checkout, so the source tree stays the single copy: rerun the same command after a `git pull`. `--no-deps` rebuilds with the `node_modules` already present, and `--restart` stops the pm2 app that serves this checkout around the build and starts it again afterwards. Stop any other running server first (`pi-web stop`) — the build replaces `.next/` underneath it.
+The script is plain `sh` (no bash needed) and clones into `$PI_WEB_DIR` (`~/pi-web` by default) when it has no checkout. The global command is a symlink to the checkout, so the source tree stays the single copy: rerun the same command after a `git pull`. `--no-deps` rebuilds with the `node_modules` already present, and `--restart` stops the pm2 app that serves this checkout around the build and starts it again afterwards. Stop any other running server first (`pi-web stop`) — the build replaces `.next/` underneath it.
 
 Without the script:
 

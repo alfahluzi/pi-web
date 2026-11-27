@@ -1,16 +1,23 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
 # Install this pi-web fork as the global `pi-web` command: update the checkout,
-# install dependencies, build .next, and link the checkout into npm's global
-# prefix. Run it from a clone of https://github.com/alfahluzi/pi-web.
+# install its dependencies, build .next, and link the checkout into npm's
+# global prefix.
 #
-#   ./install.sh             update, install deps, build, link
+# With no checkout to install, it clones the fork first, so this works on a
+# machine that has nothing but Node.js and git:
+#
+#   curl -fsSL https://raw.githubusercontent.com/alfahluzi/pi-web/custom/install.sh | sh
+#
+# Run from a clone, ./install.sh installs that checkout instead:
+#
+#   ./install.sh             update, install dependencies, build, link
 #   ./install.sh --no-deps   keep node_modules, rebuild only
 #   ./install.sh --restart   stop the pm2 app serving this checkout and start it
 #                            again after the build
 #   ./install.sh --check     print what would happen, change nothing
 #
-set -euo pipefail
+set -eu
 
 REPO_URL="${PI_WEB_REPO:-https://github.com/alfahluzi/pi-web.git}"
 BRANCH="${PI_WEB_BRANCH:-custom}"
@@ -25,10 +32,11 @@ stopped_apps=""
 
 usage() {
   cat <<'EOF'
-Usage: ./install.sh [options]
+Usage: install.sh [options]
 
-Update this checkout, install its dependencies, build .next, and link the
-checkout as the global `pi-web` command.
+Update a pi-web checkout, install its dependencies, build .next, and link the
+checkout as the global `pi-web` command. With no checkout beside the script it
+clones the fork into $PI_WEB_DIR first.
 
   --no-deps     skip `npm ci`; rebuild with the node_modules already present
   --restart     stop the pm2 app that serves this checkout before the build and
@@ -37,8 +45,7 @@ checkout as the global `pi-web` command.
   -h, --help    show this help
 
 Environment:
-  PI_WEB_DIR     where to clone when the script is not run from a checkout
-                 (default: ~/pi-web)
+  PI_WEB_DIR     checkout to install, cloned when missing (default: ~/pi-web)
   PI_WEB_REPO    repository to clone (default: https://github.com/alfahluzi/pi-web.git)
   PI_WEB_BRANCH  branch to clone and follow (default: custom)
 EOF
@@ -48,21 +55,7 @@ say() { printf '==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-# The pm2 app this script stopped, restarted on any exit path so a failed build
-# never leaves the machine without its server.
-restore_services() {
-  local status=$?
-  local app
-  if [ -n "$stopped_apps" ]; then
-    for app in $stopped_apps; do
-      printf '==> Restarting pm2 app %s\n' "$app"
-      pm2 restart "$app" >/dev/null 2>&1 || warn "pm2 restart $app failed"
-    done
-  fi
-  exit "$status"
-}
-
-check_node() {
+require_node() {
   command -v node >/dev/null 2>&1 || die "Node.js $MIN_NODE or newer is required, but node is not on PATH."
   node -e '
     const have = process.versions.node.split(".").map(Number);
@@ -70,6 +63,20 @@ check_node() {
     const diff = have[0] - need[0] || have[1] - need[1] || have[2] - need[2];
     process.exit(diff >= 0 ? 0 : 1);
   ' "$MIN_NODE" || die "Node.js $MIN_NODE or newer is required (found $(node --version))."
+}
+
+# The pm2 app this script stopped, restarted on any exit path so a failed build
+# never leaves the machine without its server.
+restore_services() {
+  trap - 0
+  status=$?
+  if [ -n "$stopped_apps" ]; then
+    for app in $stopped_apps; do
+      printf '==> Restarting pm2 app %s\n' "$app"
+      pm2 restart "$app" >/dev/null 2>&1 || warn "pm2 restart $app failed"
+    done
+  fi
+  exit "$status"
 }
 
 # Next.js servers whose working directory is this checkout. Any of them has
@@ -130,7 +137,6 @@ detect_pm2_apps() {
 }
 
 update_checkout() {
-  local branch
   if [ ! -d "$src/.git" ]; then
     warn "$src is not a git repository; building it as it is"
     return 0
@@ -164,10 +170,12 @@ update_checkout() {
 build_checkout() {
   if [ "$DO_DEPS" = 1 ]; then
     say "Installing dependencies"
+    # --include=dev: the build needs the devDependencies, and npm drops them when
+    # NODE_ENV=production happens to be set in the caller's environment.
     if [ -f "$src/package-lock.json" ]; then
-      ( cd "$src" && npm ci --no-audit --no-fund )
+      ( cd "$src" && npm ci --include=dev --no-audit --no-fund )
     else
-      ( cd "$src" && npm install --no-audit --no-fund )
+      ( cd "$src" && npm install --include=dev --no-audit --no-fund )
     fi
   fi
   say "Building .next"
@@ -178,9 +186,11 @@ build_checkout() {
 }
 
 install_global() {
-  local root="$1"
-  local dest="$root/$PACKAGE_NAME"
-  local allow_scripts=""
+  dest="$1/$PACKAGE_NAME"
+  # npm 11.19+ skips install scripts unless they are allowed by name, and this
+  # package needs its postinstall on macOS (node-pty's spawn-helper modes).
+  # Older npm has no such option and runs install scripts anyway.
+  allow_scripts=""
   if [ -L "$dest" ] && [ "$(cd "$dest" && pwd -P)" = "$src" ]; then
     say "The global command already links to this checkout ($dest)"
     return 0
@@ -188,9 +198,6 @@ install_global() {
   if [ -e "$dest" ]; then
     say "Replacing the package at $dest"
   fi
-  # npm 11.19+ skips install scripts unless they are allowed by name, and this
-  # package needs its postinstall on macOS (node-pty's spawn-helper modes).
-  # Older npm has no such option and runs install scripts anyway.
   if npm install --help 2>/dev/null | grep -q -- "--allow-scripts"; then
     allow_scripts="--allow-scripts=$PACKAGE_NAME"
   fi
@@ -199,7 +206,6 @@ install_global() {
 }
 
 report() {
-  local bin version
   bin="$(npm prefix -g)/bin/pi-web"
   if [ ! -x "$bin" ]; then
     bin="$(command -v pi-web || true)"
@@ -222,27 +228,49 @@ for arg in "$@"; do
     --restart) RESTART=1 ;;
     --check) CHECK_ONLY=1 ;;
     -h|--help) usage; exit 0 ;;
-    *) usage >&2; die "unknown option: $arg" ;;
+    *)
+      usage >&2
+      die "unknown option: $arg"
+      ;;
   esac
 done
 
 # --- checkout --------------------------------------------------------------
 
-check_node
+require_node
 
-src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-if [ ! -f "$src/package.json" ]; then
+# Through a pipe $0 is just the shell's own name, so only a script path names
+# the checkout to install. dash sets $0 to the bare file name (`sh install.sh`),
+# which resolves against the working directory.
+src=""
+if [ "$0" != "${0##*/}" ]; then
+  src="$(cd "$(dirname "$0")" 2>/dev/null && pwd -P || true)"
+elif [ -f "$0" ]; then
+  src="$(pwd -P)"
+fi
+if [ -n "$src" ] && [ -f "$src/package.json" ]; then
+  name="$(node -p 'require(process.argv[1]).name' "$src/package.json")"
+  [ "$name" = "$PACKAGE_NAME" ] || src=""
+fi
+
+if [ -z "$src" ]; then
   if [ -d "$CLONE_DIR/.git" ]; then
     src="$(cd "$CLONE_DIR" && pwd -P)"
+    name="$(node -p 'require(process.argv[1]).name' "$src/package.json")"
+    [ "$name" = "$PACKAGE_NAME" ] || die "$src/package.json is $name, not $PACKAGE_NAME"
+  elif [ "$CHECK_ONLY" = 1 ]; then
+    say "No checkout at $CLONE_DIR yet"
+    say "Node $(node --version), npm $(npm --version)"
+    say "An install would run: git clone --branch $BRANCH $REPO_URL $CLONE_DIR"
+    say "Rerun without --check to clone and install"
+    exit 0
   else
+    command -v git >/dev/null 2>&1 || die "git is required to clone $REPO_URL."
     say "Cloning $REPO_URL (branch $BRANCH) into $CLONE_DIR"
     git clone --branch "$BRANCH" "$REPO_URL" "$CLONE_DIR"
     src="$(cd "$CLONE_DIR" && pwd -P)"
   fi
 fi
-[ -f "$src/package.json" ] || die "no package.json in $src"
-name="$(node -p 'require(process.argv[1]).name' "$src/package.json")"
-[ "$name" = "$PACKAGE_NAME" ] || die "$src/package.json is $name, not $PACKAGE_NAME"
 
 global_root="$(npm root -g)"
 
@@ -287,7 +315,7 @@ fi
 
 # --- install ---------------------------------------------------------------
 
-trap restore_services EXIT
+trap restore_services 0
 
 say "Checkout: $src"
 update_checkout
